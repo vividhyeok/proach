@@ -71,6 +71,24 @@ class SessionStorage:
         path.write_text(json.dumps(asdict(take), indent=2), encoding="utf-8")
         return path
 
+    def remove_slide_artifacts(self, session: Session, slide_id: int) -> None:
+        """Delete audio/metadata files related to a slide.
+
+        The caller is responsible for updating the in-memory ``session``
+        structure (removing the slide and its takes) before saving.
+        """
+
+        takes = session.takes_by_slide.get(slide_id, [])
+        for take in takes:
+            audio_path = Path(take.audio_path)
+            metadata_path = self.build_take_metadata_path(session, take)
+            for path in (audio_path, metadata_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+        session.takes_by_slide.pop(slide_id, None)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

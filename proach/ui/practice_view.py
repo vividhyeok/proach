@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QInputDialog,
     QPushButton,
     QTextEdit,
     QLineEdit,
@@ -79,6 +80,14 @@ class PracticeView(QWidget):
         self.slide_list = QListWidget()
         self.slide_list.currentItemChanged.connect(self._on_slide_selected)
         left.addWidget(self.slide_list, 1)
+        slide_controls = QHBoxLayout()
+        self.add_slide_button = QPushButton("Add slide")
+        self.add_slide_button.clicked.connect(self._on_add_slide)
+        slide_controls.addWidget(self.add_slide_button)
+        self.delete_slide_button = QPushButton("Delete")
+        self.delete_slide_button.clicked.connect(self._on_delete_slide)
+        slide_controls.addWidget(self.delete_slide_button)
+        left.addLayout(slide_controls)
         self.slide_title = QLineEdit()
         self.slide_title.setPlaceholderText("Slide title")
         self.slide_title.editingFinished.connect(self._on_slide_title_edited)
@@ -127,12 +136,25 @@ class PracticeView(QWidget):
     # ------------------------------------------------------------------
     def _refresh_slides(self) -> None:
         self.slide_list.clear()
+        previous_id = self.current_slide.id if self.current_slide else None
         for slide in self.session.slides:
             item = QListWidgetItem(f"{slide.id:02d} - {slide.title}")
             item.setData(Qt.ItemDataRole.UserRole, slide)
             self.slide_list.addItem(item)
         if self.session.slides:
-            self.slide_list.setCurrentRow(0)
+            target_row = 0
+            if previous_id:
+                for idx in range(self.slide_list.count()):
+                    item = self.slide_list.item(idx)
+                    if item.data(Qt.ItemDataRole.UserRole).id == previous_id:
+                        target_row = idx
+                        break
+            self.slide_list.setCurrentRow(target_row)
+        else:
+            self.current_slide = None
+            self.slide_title.clear()
+            self.slide_notes.clear()
+            self.take_list.clear()
 
     def _refresh_takes(self) -> None:
         self.take_list.clear()
@@ -148,6 +170,9 @@ class PracticeView(QWidget):
     def _on_slide_selected(self, current: QListWidgetItem, _previous: QListWidgetItem) -> None:
         if not current:
             self.current_slide = None
+            self.slide_title.clear()
+            self.slide_notes.clear()
+            self.take_list.clear()
             return
         slide = current.data(Qt.ItemDataRole.UserRole)
         self.current_slide = slide
@@ -167,6 +192,43 @@ class PracticeView(QWidget):
             return
         self.current_slide.notes = self.slide_notes.toPlainText()
         self.storage.save_session(self.session)
+
+    def _on_add_slide(self) -> None:
+        next_id = self.session.next_slide_id()
+        title, ok = QInputDialog.getText(
+            self,
+            "Add slide",
+            "Slide title",
+            text=f"Slide {next_id}",
+        )
+        if not ok or not title.strip():
+            return
+        slide = Slide(id=next_id, title=title.strip())
+        self.session.slides.append(slide)
+        self.storage.save_session(self.session)
+        self.current_slide = slide
+        self._refresh_slides()
+        self._refresh_takes()
+
+    def _on_delete_slide(self) -> None:
+        if not self.current_slide:
+            QMessageBox.warning(self, "No slide", "Select a slide to delete")
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete slide",
+            "Delete this slide and its takes?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        slide_id = self.current_slide.id
+        self.storage.remove_slide_artifacts(self.session, slide_id)
+        self.session.remove_slide(slide_id)
+        self.storage.save_session(self.session)
+        self.current_slide = self.session.slides[0] if self.session.slides else None
+        self._refresh_slides()
+        self._refresh_takes()
 
     # ------------------------------------------------------------------
     def _on_record_clicked(self) -> None:
@@ -228,11 +290,11 @@ class PracticeView(QWidget):
         if not take:
             QMessageBox.warning(self, "No take", "Select a take to transcribe")
             return
-        if not self.transcriber:
-            QMessageBox.warning(self, "Transcriber missing", "Configure API key first.")
-            return
         if take.transcript_text:
             self._run_analysis(take)
+            return
+        if not self.transcriber:
+            QMessageBox.warning(self, "Transcriber missing", "Configure API key first.")
             return
 
         self.analyze_button.setEnabled(False)

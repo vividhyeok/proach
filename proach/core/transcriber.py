@@ -13,13 +13,13 @@ from elevenlabs import ElevenLabs
 class Transcriber:
     """Simple helper that converts audio files via ElevenLabs Scribe v1."""
 
-    def __init__(self, api_key: Optional[str] = None, language_code: str = "kor"):
+    def __init__(self, api_key: Optional[str] = None, language_code: Optional[str] = None):
         load_dotenv()
         api_key = api_key or os.getenv("ELEVENLABS_API_KEY")
         if not api_key:
             raise RuntimeError("ELEVENLABS_API_KEY is missing. Populate .env first.")
         self.client = ElevenLabs(api_key=api_key)
-        self.language_code = language_code
+        self.language_code = language_code or os.getenv("DEFAULT_LANGUAGE_CODE", "kor")
 
     def transcribe(self, audio_path: Path) -> Dict[str, object]:
         audio_path = Path(audio_path)
