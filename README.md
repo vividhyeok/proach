@@ -118,11 +118,20 @@ DEFAULT_LANGUAGE_CODE=kor
 ```powershell
 cd Proach   # 이미 그 안에 있다면 생략
 \.venv\Scripts\activate   # 가상환경이 꺼져 있다면 다시 활성화
-python -m proach.main
+python -m proach.main       # 기존 PyQt6 데스크톱 UI
 ```
 
-처음 실행 시 `proach/sessions/` 아래에 세션 폴더가 자동으로 생성됩니다. 좌측 리스트에서 슬라이드를 선택하고, 중앙의 [녹음 시작]/[정지] 버튼으로 슬라이드별 연습을 한 뒤, 우측에서 원하는 트를 골라 전사/분석을 실행할 수 있습니다.
+### 6. 웹 UI 실행
 
+PyQt6 앱 대신 브라우저에서 녹음/전사를 하고 싶다면 Flask 기반의 웹 서버를 실행하세요.
+
+```powershell
+cd Proach
+\.venv\Scripts\activate
+python -m proach.webapp
+```
+
+서버는 기본적으로 `http://127.0.0.1:5000`에서 동작하며, 브라우저 상에서 슬라이드 관리와 마이크 녹음, 전사/분석을 바로 수행하고 결과는 로컬 `proach/sessions/` 폴더에 저장됩니다.
 ## Tips & Next Steps
 
 - 실제 연습 데이터(녹음 파일, 전사/분석 결과)는 기본적으로 `proach/sessions/<session_id>/` 아래에 저장됩니다. 필요하다면 `.gitignore`에 해당 경로를 추가해 Git에 올리지 않아도 됩니다.
