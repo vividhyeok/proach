@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local sessions and generated data (optional to commit)
+# Uncomment if you DON'T want to track practice data
+# proach/sessions/
+
+# Environment variables
+.env
+
+# Upper directories (to avoid tracking parent files)
+../../../../*
