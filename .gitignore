@@ -102,3 +102,6 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .vscode-test/
+
+# Proach application
+proach/sessions/
