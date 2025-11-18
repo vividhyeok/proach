@@ -26,6 +26,3 @@ Thumbs.db
 
 # Environment variables
 .env
-
-# Upper directories (to avoid tracking parent files)
-../../../../*

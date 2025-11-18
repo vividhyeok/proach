@@ -60,6 +60,10 @@ class Session:
             return 1
         return max(take.id for take in takes) + 1
 
+    def remove_slide(self, slide_id: int) -> None:
+        self.slides = [slide for slide in self.slides if slide.id != slide_id]
+        self.takes_by_slide.pop(slide_id, None)
+
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         # JSON does not like int keys, so stringify them.
