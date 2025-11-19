@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { usePresentations, Presentation } from '../hooks/usePresentations';
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { deepseekChat, extractJsonBlock } from '../utils/deepseek';
 // public 폴더의 워커 파일을 직접 지정
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
@@ -20,6 +21,8 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [practiceMode, setPracticeMode] = useState<'draft' | 'final'>('draft');
   const [alignmentFeedback, setAlignmentFeedback] = useState<string | null>(null);
   const [latestTranscript, setLatestTranscript] = useState<string>('');
+  const [scriptStatus, setScriptStatus] = useState<string | null>(null);
+  const [liveSyncStatus, setLiveSyncStatus] = useState<string | null>(null);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
 
@@ -31,11 +34,21 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   };
 
   const guideTake = currentSlide.takes.find(take => take.isBest);
-  const guideScript = guideTake?.transcript || currentSlide.notes;
+  const guideScript = guideTake?.transcript || currentSlide.curatedScript || currentSlide.notes;
+
+  const cloneSlidesWithCurrent = () => {
+    const updatedSlides = [...presentation.slides];
+    if (!updatedSlides[currentPage - 1]) {
+      updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
+    }
+    return updatedSlides;
+  };
 
   useEffect(() => {
     setAlignmentFeedback(null);
     setLatestTranscript('');
+    setScriptStatus(null);
+    setLiveSyncStatus(null);
   }, [practiceMode, currentPage]);
 
   useEffect(() => {
@@ -149,6 +162,135 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     return message;
   };
 
+  const formatTakesForPrompt = () =>
+    currentSlide.takes
+      .map((take, index) => {
+        const label = `${index + 1}트 (${take.mode === 'final' ? '최종' : '대본'}${take.modelId ? ` · ${take.modelId}` : ''})`;
+        return `${label}\n${take.transcript || '[텍스트 없음]'}`;
+      })
+      .join('\n----\n');
+
+  const handleGenerateCuratedScript = async () => {
+    if (!currentSlide.takes.length) {
+      setScriptStatus('녹음본이 없습니다. 한 번 이상 녹음해 주세요.');
+      return;
+    }
+
+    setScriptStatus('Deepseek에 대본 정리를 요청 중...');
+    try {
+      const prompt = formatTakesForPrompt();
+      const content = await deepseekChat([
+        {
+          role: 'system',
+          content: '당신은 발표 코치입니다. 여러 번의 녹음 텍스트를 취합해 구조화된 최종 스크립트를 제안합니다.',
+        },
+        {
+          role: 'user',
+          content:
+            '다음은 같은 슬라이드를 설명한 여러 번의 녹음 텍스트입니다. ' +
+            '중복을 제거하고 핵심을 유지한 정돈된 대본을 한국어로 작성해 주세요. ' +
+            '응답은 JSON으로 주세요. keys: script (문단 형태), keyPoints (문장 배열), coachNote (한줄 팁).\n\n' +
+            prompt,
+        },
+      ], { responseFormat: 'json', temperature: 0.35 });
+
+      const parsed = extractJsonBlock(content);
+      const curatedScript = parsed?.script || content;
+      const keyPoints: string[] | undefined = parsed?.keyPoints || parsed?.outline;
+
+      const updatedSlides = cloneSlidesWithCurrent();
+      updatedSlides[currentPage - 1] = {
+        ...updatedSlides[currentPage - 1],
+        curatedScript: curatedScript.trim(),
+        curatedScriptMeta: {
+          generatedAt: Date.now(),
+          sourceTakeIds: currentSlide.takes.map((take) => take.id),
+          keyPoints,
+        },
+      };
+      update(presentation.id, { slides: updatedSlides });
+      setScriptStatus('정돈된 대본이 저장되었습니다.');
+    } catch (error) {
+      console.error('Deepseek script error:', error);
+      setScriptStatus(`오류: ${(error as Error).message}`);
+    }
+  };
+
+  const runLiveSyncAnalysis = async (
+    spoken: string,
+    script: string,
+    baseSlides?: Presentation['slides'],
+  ) => {
+    if (!spoken.trim()) {
+      setLiveSyncStatus('비교할 전사가 없습니다.');
+      return;
+    }
+    setLiveSyncStatus('Deepseek 싱크 분석 중...');
+    try {
+      const content = await deepseekChat([
+        {
+          role: 'system',
+          content: '당신은 발표 리허설 코치입니다. 실시간 전사와 이상적인 대본을 비교해 다음 대본을 제안합니다.',
+        },
+        {
+          role: 'user',
+          content:
+            '이상적인 대본과 실제 발화를 비교해 주세요. ' +
+            'JSON으로 {"alignmentSummary": "..", "missingPoints": "..", "nextLines": [".."]} 형태로 답변하세요.\n' +
+            `대본:\n${script}\n\n실제 발화:\n${spoken}`,
+        },
+      ], { responseFormat: 'json', temperature: 0.2 });
+
+      const parsed = extractJsonBlock(content);
+      const summary = parsed?.alignmentSummary || parsed?.summary || content;
+      const missingRaw = parsed?.missingPoints || parsed?.missingKeywords || parsed?.delta;
+      const nextLinesRaw = parsed?.nextLines || parsed?.nextPhrases || parsed?.nextScript;
+
+      const missingAsText = Array.isArray(missingRaw)
+        ? missingRaw.join(', ')
+        : (missingRaw as string | undefined);
+      const nextLines = Array.isArray(nextLinesRaw)
+        ? nextLinesRaw
+        : typeof nextLinesRaw === 'string'
+          ? nextLinesRaw.split(/\n+/).filter(Boolean)
+          : undefined;
+
+      const slidesSource = baseSlides ?? presentation.slides;
+      const updatedSlides = [...slidesSource];
+      if (!updatedSlides[currentPage - 1]) {
+        updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
+      }
+      updatedSlides[currentPage - 1] = {
+        ...updatedSlides[currentPage - 1],
+        liveSyncPreview: {
+          alignmentSummary: summary,
+          missingPoints: missingAsText,
+          nextLines,
+          generatedAt: Date.now(),
+        },
+      };
+      update(presentation.id, { slides: updatedSlides });
+      setAlignmentFeedback(missingAsText ? `${summary} · ${missingAsText}` : summary);
+      setLiveSyncStatus('싱크 분석 완료');
+    } catch (error) {
+      console.error('Deepseek live sync error:', error);
+      setLiveSyncStatus(`오류: ${(error as Error).message}`);
+    }
+  };
+
+  const handleManualLiveSync = () => {
+    if (!currentSlide.curatedScript) {
+      setLiveSyncStatus('먼저 Deepseek 대본을 생성해 주세요.');
+      return;
+    }
+    const latest = latestTranscript || currentSlide.takes[currentSlide.takes.length - 1]?.transcript || '';
+    if (!latest) {
+      setLiveSyncStatus('비교할 전사가 없습니다. 녹음 후 다시 시도하세요.');
+      return;
+    }
+    runLiveSyncAnalysis(latest, currentSlide.curatedScript);
+  };
+
   const transcribeAudio = async (audioBlob: Blob) => {
     setStatus('텍스트 변환 중...');
     try {
@@ -196,16 +338,17 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
             feedback,
           };
 
-          const updatedSlides = [...presentation.slides];
-          if (!updatedSlides[currentPage - 1]) {
-            updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
-          }
-          updatedSlides[currentPage - 1].takes.push(newTake);
+          const slidesWithNewTake = cloneSlidesWithCurrent();
+          slidesWithNewTake[currentPage - 1].takes.push(newTake);
 
-          update(presentation.id, { slides: updatedSlides });
+          update(presentation.id, { slides: slidesWithNewTake });
           setStatus('녹음 완료!');
           setLatestTranscript(fullText);
           setAlignmentFeedback(feedback ?? null);
+
+          if (practiceMode === 'final' && currentSlide.curatedScript) {
+            await runLiveSyncAnalysis(fullText, currentSlide.curatedScript, slidesWithNewTake);
+          }
         } else {
           setStatus('음성 인식 실패 - 변환된 텍스트 없음');
         }
@@ -227,10 +370,7 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   };
 
   const handleMarkBest = (takeId: string) => {
-    const updatedSlides = [...presentation.slides];
-    if (!updatedSlides[currentPage - 1]) {
-      updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
-    }
+    const updatedSlides = cloneSlidesWithCurrent();
 
     const currentTakes = updatedSlides[currentPage - 1].takes;
     const target = currentTakes.find(t => t.id === takeId);
@@ -245,10 +385,7 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   };
 
   const handleNotesChange = (notes: string) => {
-    const updatedSlides = [...presentation.slides];
-    if (!updatedSlides[currentPage - 1]) {
-      updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
-    }
+    const updatedSlides = cloneSlidesWithCurrent();
     updatedSlides[currentPage - 1].notes = notes;
     update(presentation.id, { slides: updatedSlides });
   };
@@ -403,6 +540,85 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
               </div>
             </div>
           )}
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium text-gray-300">Deepseek 대본 어시스턴트</h4>
+              {scriptStatus && (
+                <span className="text-[11px] text-gray-400">{scriptStatus}</span>
+              )}
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
+              <button
+                onClick={handleGenerateCuratedScript}
+                className="w-full text-sm bg-purple-700/80 hover:bg-purple-700 text-white py-2 rounded disabled:opacity-40"
+                disabled={currentSlide.takes.length === 0}
+              >
+                N트 기반 정돈 대본 생성
+              </button>
+              {currentSlide.curatedScript ? (
+                <div className="text-xs text-gray-200 space-y-2">
+                  <div className="flex items-center justify-between text-[10px] text-gray-400">
+                    <span>최종본 업데이트</span>
+                    {currentSlide.curatedScriptMeta?.generatedAt && (
+                      <span>{new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString()}</span>
+                    )}
+                  </div>
+                  <div className="bg-gray-950 border border-gray-800 rounded p-3 max-h-36 overflow-y-auto whitespace-pre-wrap">
+                    {currentSlide.curatedScript}
+                  </div>
+                  {currentSlide.curatedScriptMeta?.keyPoints && (
+                    <div>
+                      <p className="text-[10px] text-gray-400 mb-1">핵심 포인트</p>
+                      <ul className="list-disc pl-4 space-y-1">
+                        {currentSlide.curatedScriptMeta.keyPoints.map((point, idx) => (
+                          <li key={idx}>{point}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500 text-center">
+                  대본 정리를 실행하면 정돈된 스크립트와 핵심 포인트가 여기에 나타납니다.
+                </p>
+              )}
+
+              <div className="space-y-2">
+                <button
+                  onClick={handleManualLiveSync}
+                  className="w-full text-xs border border-purple-500/60 text-purple-200 py-2 rounded disabled:opacity-40"
+                  disabled={!currentSlide.curatedScript}
+                >
+                  Deepseek 싱크 맞추기
+                </button>
+                {liveSyncStatus && (
+                  <p className="text-[11px] text-gray-400 text-center">{liveSyncStatus}</p>
+                )}
+                {currentSlide.liveSyncPreview && (
+                  <div className="bg-purple-950/40 border border-purple-700/40 rounded p-2 text-[11px] space-y-2">
+                    <div>
+                      <p className="text-purple-200 font-semibold">정합 요약</p>
+                      <p className="text-gray-100">{currentSlide.liveSyncPreview.alignmentSummary}</p>
+                    </div>
+                    {currentSlide.liveSyncPreview.missingPoints && (
+                      <p className="text-gray-300">누락: {currentSlide.liveSyncPreview.missingPoints}</p>
+                    )}
+                    {currentSlide.liveSyncPreview.nextLines && currentSlide.liveSyncPreview.nextLines.length > 0 && (
+                      <div>
+                        <p className="text-purple-200 font-semibold">다음 내용 미리보기</p>
+                        <ul className="list-decimal pl-4 space-y-1 text-gray-100">
+                          {currentSlide.liveSyncPreview.nextLines.map((line, idx) => (
+                            <li key={idx}>{line}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
 
           {/* 녹음 기록 */}
           <div>
