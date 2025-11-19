@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { usePresentations, Presentation } from "../hooks/usePresentations";
+import { usePresentations } from "../hooks/usePresentations";
 import { v4 as uuidv4 } from 'uuid';
 
 interface PresentationListStepProps {

@@ -18,15 +18,26 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState('Idle');
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [practiceMode, setPracticeMode] = useState<'draft' | 'final'>('draft');
+  const [alignmentFeedback, setAlignmentFeedback] = useState<string | null>(null);
+  const [latestTranscript, setLatestTranscript] = useState<string>('');
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
 
   // 현재 슬라이드 데이터 초기화
-  const currentSlide = presentation.slides[currentPage - 1] || { 
-    page: currentPage, 
-    notes: '', 
-    takes: [] 
+  const currentSlide = presentation.slides[currentPage - 1] || {
+    page: currentPage,
+    notes: '',
+    takes: []
   };
+
+  const guideTake = currentSlide.takes.find(take => take.isBest);
+  const guideScript = guideTake?.transcript || currentSlide.notes;
+
+  useEffect(() => {
+    setAlignmentFeedback(null);
+    setLatestTranscript('');
+  }, [practiceMode, currentPage]);
 
   useEffect(() => {
     if (!presentation.pdfData) {
@@ -63,7 +74,7 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
         } 
       });
       setIsRecording(true);
-      setStatus('녹음 중...');
+      setStatus(practiceMode === 'final' ? '최종 리허설 녹음 중...' : '대본 구축 녹음 중...');
       mediaRecorder.current = new MediaRecorder(stream);
       audioChunks.current = [];
 
@@ -97,6 +108,48 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     }
   };
 
+  const normalizeText = (text: string) => text
+    .toLowerCase()
+    .replace(/[^a-z0-9\uAC00-\uD7A3\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const generateAlignmentFeedback = (spoken: string, guide?: string) => {
+    if (!guide || guide.trim().length === 0) {
+      return '가이드 스크립트를 먼저 선택하거나 노트에 핵심 문장을 작성해 주세요.';
+    }
+
+    const spokenWords = normalizeText(spoken);
+    const guideWords = normalizeText(guide);
+
+    if (guideWords.length === 0) {
+      return '가이드 스크립트가 비어있습니다. 노트를 채워주세요.';
+    }
+
+    const matchCount = guideWords.filter(word => spokenWords.includes(word)).length;
+    const coverage = Math.min(100, Math.round((matchCount / guideWords.length) * 100));
+    const delta = spokenWords.length - guideWords.length;
+    const uniqueGuideWords = Array.from(new Set(guideWords.filter(word => word.length > 2)));
+    const missingKeywords = uniqueGuideWords
+      .filter(word => !spokenWords.includes(word))
+      .slice(0, 3);
+
+    let message = `가이드 대비 약 ${coverage}%를 커버했습니다. `;
+    if (delta > 5) {
+      message += '설명이 다소 길어졌어요. 핵심만 간결하게 정리해보세요.';
+    } else if (delta < -5) {
+      message += '설명이 짧았습니다. 강조할 포인트를 더 설명해보세요.';
+    } else {
+      message += '길이 밸런스가 좋습니다. 안정적인 흐름을 유지해보세요.';
+    }
+
+    if (missingKeywords.length) {
+      message += ` 빠진 키워드: ${missingKeywords.join(', ')}`;
+    }
+
+    return message;
+  };
+
   const transcribeAudio = async (audioBlob: Blob) => {
     setStatus('텍스트 변환 중...');
     try {
@@ -104,9 +157,10 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
         apiKey: import.meta.env.VITE_ELEVENLABS_API_KEY as string,
       });
 
+      const modelId = practiceMode === 'final' ? 'scribe_v2' : 'scribe_v1';
       const transcriptionResult = await elevenlabs.speechToText.convert({
         file: audioBlob,
-        modelId: 'scribe_v1',
+        modelId,
         languageCode: 'ko',
       });
 
@@ -127,12 +181,20 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
 
         if (fullText) {
           // 현재 슬라이드에 녹음 추가
+          const feedback = practiceMode === 'final'
+            ? generateAlignmentFeedback(fullText, guideScript)
+            : undefined;
+
           const newTake = {
             id: Date.now().toString(),
             timestamp: Date.now(),
             audioUrl: URL.createObjectURL(audioBlob),
             transcript: fullText,
-            isBest: false
+            isBest: false,
+            mode: practiceMode,
+            modelId,
+            takeNumber: currentSlide.takes.length + 1,
+            feedback,
           };
 
           const updatedSlides = [...presentation.slides];
@@ -143,6 +205,8 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
 
           update(presentation.id, { slides: updatedSlides });
           setStatus('녹음 완료!');
+          setLatestTranscript(fullText);
+          setAlignmentFeedback(feedback ?? null);
         } else {
           setStatus('음성 인식 실패 - 변환된 텍스트 없음');
         }
@@ -161,6 +225,24 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     } else {
       handleStartRecording();
     }
+  };
+
+  const handleMarkBest = (takeId: string) => {
+    const updatedSlides = [...presentation.slides];
+    if (!updatedSlides[currentPage - 1]) {
+      updatedSlides[currentPage - 1] = { page: currentPage, notes: '', takes: [] };
+    }
+
+    const currentTakes = updatedSlides[currentPage - 1].takes;
+    const target = currentTakes.find(t => t.id === takeId);
+    const willBeBest = target ? !target.isBest : true;
+
+    updatedSlides[currentPage - 1].takes = currentTakes.map(take => ({
+      ...take,
+      isBest: take.id === takeId ? willBeBest : false,
+    }));
+
+    update(presentation.id, { slides: updatedSlides });
   };
 
   const handleNotesChange = (notes: string) => {
@@ -204,8 +286,8 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                 onLoadError={handleLoadError}
                 loading={<div className="text-gray-600">PDF 로딩 중...</div>}
               >
-                <Page 
-                  pageNumber={currentPage} 
+                <Page
+                  pageNumber={currentPage}
                   width={500}
                   renderTextLayer={false}
                   renderAnnotationLayer={false}
@@ -213,16 +295,61 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
               </Document>
             )}
           </div>
+          {!pdfError && (
+            <div className="flex items-center justify-between text-sm text-gray-300 mt-4">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 rounded bg-gray-900 border border-gray-700 disabled:opacity-40"
+              >
+                이전 슬라이드
+              </button>
+              <span className="text-gray-400">
+                {currentPage} / {numPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(numPages, prev + 1))}
+                disabled={currentPage === numPages}
+                className="px-3 py-1 rounded bg-gray-900 border border-gray-700 disabled:opacity-40"
+              >
+                다음 슬라이드
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 녹음 및 노트 패널 */}
-        <div className="w-80 bg-gray-800 rounded-lg p-4">
+        <div className="w-96 bg-gray-800 rounded-lg p-4 space-y-6">
           <h3 className="text-lg font-semibold mb-4 text-purple-300">
             슬라이드 {currentPage} - 연습
           </h3>
 
+          <div>
+            <p className="text-sm text-gray-300 mb-2 font-semibold">연습 모드</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setPracticeMode('draft')}
+                className={`px-3 py-2 rounded text-sm border transition ${practiceMode === 'draft'
+                  ? 'bg-purple-600 border-purple-400 text-white'
+                  : 'bg-gray-900 border-gray-700 text-gray-300'}`}
+              >
+                1~N트 대본 구축
+                <span className="block text-[10px] text-gray-200">Scribe v1 · 소음 환경 대응</span>
+              </button>
+              <button
+                onClick={() => setPracticeMode('final')}
+                className={`px-3 py-2 rounded text-sm border transition ${practiceMode === 'final'
+                  ? 'bg-purple-600 border-purple-400 text-white'
+                  : 'bg-gray-900 border-gray-700 text-gray-300'}`}
+              >
+                최종 리허설
+                <span className="block text-[10px] text-gray-200">Scribe v2 Realtime</span>
+              </button>
+            </div>
+          </div>
+
           {/* 녹음 컨트롤 */}
-          <div className="mb-6">
+          <div>
             <button
               onClick={toggleRecording}
               disabled={status.includes('처리') || status.includes('변환')}
@@ -238,7 +365,7 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
           </div>
 
           {/* 노트 입력 */}
-          <div className="mb-6">
+          <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               슬라이드 노트
             </label>
@@ -249,6 +376,34 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
               placeholder="이 슬라이드에서 말할 주요 포인트를 적어보세요..."
             />
           </div>
+
+          <div>
+            <h4 className="text-sm font-medium text-gray-300 mb-2">가이드 스크립트</h4>
+            {guideScript ? (
+              <div className="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-200 leading-relaxed">
+                {guideScript}
+              </div>
+            ) : (
+              <p className="text-gray-500 text-xs">
+                노트에 주요 문장을 적거나 녹음 목록에서 "가이드로 사용"을 눌러 최종 리허설 참고 스크립트를 지정하세요.
+              </p>
+            )}
+          </div>
+
+          {practiceMode === 'final' && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-300 mb-2">실시간 코칭</h4>
+              <div className="bg-gray-900 border border-purple-600/30 rounded p-3 space-y-2">
+                <p className="text-xs text-gray-400">마지막 전사</p>
+                <p className="text-sm text-gray-100 min-h-[60px]">
+                  {latestTranscript || '아직 녹음 데이터가 없습니다.'}
+                </p>
+                <p className="text-xs text-purple-300">
+                  {alignmentFeedback || '가이드 대비 피드백은 최종 리허설 녹음 후 제공됩니다.'}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* 녹음 기록 */}
           <div>
@@ -262,11 +417,18 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                 </p>
               ) : (
                 currentSlide.takes.map((take) => (
-                  <div key={take.id} className="bg-gray-900 p-3 rounded text-sm">
+                  <div key={take.id} className="bg-gray-900 p-3 rounded text-sm border border-gray-800">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="text-gray-400 text-xs">
-                        {new Date(take.timestamp).toLocaleTimeString()}
-                      </span>
+                      <div className="text-xs text-gray-400 space-y-1">
+                        <div className="font-semibold text-gray-200">
+                          {take.mode === 'final' ? '최종 리허설' : '대본 구축'} {take.takeNumber ? `· ${take.takeNumber}트` : ''}
+                        </div>
+                        <div>{new Date(take.timestamp).toLocaleTimeString()}</div>
+                        <div className="flex gap-2 text-[10px]">
+                          {take.modelId && <span className="px-2 py-0.5 rounded bg-gray-800 border border-gray-700">{take.modelId}</span>}
+                          {take.isBest && <span className="px-2 py-0.5 rounded bg-purple-800 border border-purple-500 text-purple-100">가이드</span>}
+                        </div>
+                      </div>
                       <button
                         onClick={() => {
                           const audio = new Audio(take.audioUrl);
@@ -280,6 +442,17 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                     <p className="text-gray-300 text-xs leading-relaxed">
                       {take.transcript || '텍스트 변환 중...'}
                     </p>
+                    {take.feedback && (
+                      <p className="text-[11px] text-purple-200 mt-2">
+                        {take.feedback}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => handleMarkBest(take.id)}
+                      className="mt-2 text-[11px] text-purple-300 hover:text-white underline"
+                    >
+                      {take.isBest ? '가이드 지정 해제' : '이 녹음을 가이드로 사용'}
+                    </button>
                   </div>
                 ))
               )}
