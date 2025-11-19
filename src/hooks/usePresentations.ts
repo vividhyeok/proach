@@ -16,6 +16,18 @@ export interface SlideData {
   page: number;
   notes: string;
   takes: SlideTake[];
+  curatedScript?: string;
+  curatedScriptMeta?: {
+    generatedAt: number;
+    sourceTakeIds: string[];
+    keyPoints?: string[];
+  };
+  liveSyncPreview?: {
+    alignmentSummary: string;
+    missingPoints?: string;
+    nextLines?: string[];
+    generatedAt: number;
+  };
 }
 
 export interface Presentation {
