@@ -6,6 +6,10 @@ export interface SlideTake {
   audioUrl: string;
   transcript?: string;
   isBest?: boolean;
+  mode?: 'draft' | 'final';
+  modelId?: string;
+  takeNumber?: number;
+  feedback?: string;
 }
 
 export interface SlideData {
