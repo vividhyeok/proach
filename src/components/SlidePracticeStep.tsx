@@ -2,9 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { usePresentations, Presentation } from '../hooks/usePresentations';
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-
-// PDF.js 워커 설정 - CDN 사용
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+// public 폴더의 워커 파일을 직접 지정
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 interface SlidePracticeStepProps {
   presentation: Presentation;
