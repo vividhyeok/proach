@@ -1,7 +1,11 @@
 import React, { useRef, useState } from "react";
 import { usePresentations } from "../hooks/usePresentations";
 import { v4 as uuidv4 } from 'uuid';
-import { Plus, X, Upload, FileText } from 'lucide-react';
+const IconBox: React.FC<{ label: string }> = ({ label }) => (
+  <span className="inline-flex items-center justify-center w-4 h-4 text-current font-bold align-middle">
+    {label}
+  </span>
+);
 
 interface PresentationListStepProps {
   onSelect: (presentationId: string) => void;
@@ -60,7 +64,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
             className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-4 rounded-2xl hover:bg-blue-700 transition-all duration-200 font-semibold shadow-lg hover:shadow-xl"
             onClick={() => setCreating(true)}
           >
-            <Plus size={20} />
+            <IconBox label="＋" />
             새 세션 만들기
           </button>
         )}
@@ -68,11 +72,11 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
 
       {/* Presentations Grid */}
       <div className="space-y-6">
-        {presentations.length === 0 && !creating && (
-          <div className="text-center border-2 border-dashed border-slate-200 rounded-3xl p-16 space-y-4">
-            <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto">
-              <FileText className="text-blue-600" size={32} />
-            </div>
+          {presentations.length === 0 && !creating && (
+            <div className="text-center border-2 border-dashed border-slate-200 rounded-3xl p-16 space-y-4">
+              <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto">
+                <span className="text-blue-600 text-3xl">📄</span>
+              </div>
             <div className="space-y-2">
               <p className="text-xl font-semibold text-slate-900">아직 생성된 세션이 없습니다</p>
               <p className="text-slate-600">PDF 자료와 함께 첫 번째 세션을 만들어보세요.</p>
@@ -105,7 +109,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
                   className="text-slate-400 hover:text-red-500 transition-colors p-1 rounded-lg hover:bg-red-50"
                   onClick={() => remove(p.id)}
                 >
-                  <X size={16} />
+                  <IconBox label="✕" />
                 </button>
               </div>
               
@@ -137,11 +141,11 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
               <h3 className="text-2xl font-bold text-slate-900">새 발표 세션</h3>
               <p className="text-slate-600">발표 연습을 위한 세션 정보를 입력해주세요.</p>
             </div>
-            <button 
+            <button
               className="text-slate-400 hover:text-slate-600 transition-colors p-2 rounded-lg hover:bg-slate-100"
               onClick={() => setCreating(false)}
             >
-              <X size={24} />
+              <IconBox label="✕" />
             </button>
           </div>
           
@@ -170,7 +174,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
                 />
                 {newPDF && (
                   <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
-                    <FileText size={16} className="text-green-600" />
+                    <span className="text-green-600 text-sm">📄</span>
                     <span className="text-sm text-green-600 font-medium">{newPDF.name}</span>
                   </div>
                 )}
@@ -190,7 +194,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
               disabled={!newName || !newPDF}
               onClick={handleCreate}
             >
-              <Upload size={16} />
+              <IconBox label="⇧" />
               세션 생성
             </button>
           </div>

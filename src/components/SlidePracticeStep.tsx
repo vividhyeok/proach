@@ -23,6 +23,8 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [scriptStatus, setScriptStatus] = useState<string | null>(null);
   const [liveSyncStatus, setLiveSyncStatus] = useState<string | null>(null);
   const [panel, setPanel] = useState<'record' | 'ai' | 'history'>('record');
+  const [editingTakeId, setEditingTakeId] = useState<string | null>(null);
+  const [editingTranscript, setEditingTranscript] = useState('');
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
 
@@ -376,6 +378,61 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     update(presentation.id, { slides: updatedSlides });
   };
 
+  const handleDeleteTake = (takeId: string) => {
+    const updatedSlides = cloneSlidesWithCurrent();
+    const currentTakes = updatedSlides[currentPage - 1].takes.filter(t => t.id !== takeId);
+
+    updatedSlides[currentPage - 1].takes = currentTakes.map((take, index) => ({
+      ...take,
+      takeNumber: index + 1,
+    }));
+
+    if (editingTakeId === takeId) {
+      setEditingTakeId(null);
+      setEditingTranscript('');
+    }
+
+    const latest = currentTakes.reduce((latestTake, take) =>
+      take.timestamp > (latestTake?.timestamp ?? 0) ? take : latestTake,
+    undefined as typeof currentTakes[number] | undefined);
+
+    setLatestTranscript(latest?.transcript ?? '');
+
+    update(presentation.id, { slides: updatedSlides });
+  };
+
+  const handleEditTranscript = (takeId: string) => {
+    setEditingTakeId(takeId);
+    setEditingTranscript(currentSlide.takes.find(t => t.id === takeId)?.transcript || '');
+  };
+
+  const handleSaveTranscript = (takeId: string) => {
+    const updatedSlides = cloneSlidesWithCurrent();
+    const currentTakes = updatedSlides[currentPage - 1].takes.map(take =>
+      take.id === takeId ? { ...take, transcript: editingTranscript } : take
+    );
+
+    updatedSlides[currentPage - 1].takes = currentTakes;
+    update(presentation.id, { slides: updatedSlides });
+
+    const latest = currentTakes.reduce((latestTake, take) =>
+      take.timestamp > (latestTake?.timestamp ?? 0) ? take : latestTake,
+    undefined as typeof currentTakes[number] | undefined);
+    if (latest && latest.id === takeId) {
+      setLatestTranscript(editingTranscript);
+    }
+
+    setEditingTakeId(null);
+    setEditingTranscript('');
+  };
+
+  const handleUseCuratedAsNotes = () => {
+    if (!currentSlide.curatedScript) return;
+    const updatedSlides = cloneSlidesWithCurrent();
+    updatedSlides[currentPage - 1].notes = currentSlide.curatedScript;
+    update(presentation.id, { slides: updatedSlides });
+  };
+
   const handleNotesChange = (notes: string) => {
     const updatedSlides = cloneSlidesWithCurrent();
     updatedSlides[currentPage - 1].notes = notes;
@@ -533,6 +590,39 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                 )}
               </div>
 
+              {currentSlide.curatedScript && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <h4 className="text-sm font-medium text-slate-300">Deepseek 정돈본 저장됨</h4>
+                    {currentSlide.curatedScriptMeta?.generatedAt && (
+                      <span>
+                        {new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString('ko-KR')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="bg-slate-900 border border-purple-600/30 rounded-xl p-3 text-xs text-slate-200 leading-relaxed space-y-2">
+                    <p className="text-[11px] text-purple-200">AI 코칭 탭에서 만든 정돈본이 여기에도 보관됩니다.</p>
+                    <div className="max-h-28 overflow-y-auto whitespace-pre-wrap border border-slate-800 rounded-lg p-2 bg-slate-950/60">
+                      {currentSlide.curatedScript}
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <button
+                        onClick={handleUseCuratedAsNotes}
+                        className="px-3 py-1 rounded-lg border border-purple-500/60 text-purple-100 hover:bg-purple-700/40"
+                      >
+                        이 내용을 노트에 붙여넣기
+                      </button>
+                      <button
+                        onClick={() => setPanel('ai')}
+                        className="px-3 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
+                      >
+                        AI 대본 정리 보기
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {practiceMode === 'final' && (
                 <div className="space-y-2">
                   <h4 className="text-sm font-medium text-slate-300">실시간 코칭</h4>
@@ -558,6 +648,19 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                   <span className="text-[11px] text-slate-400">{scriptStatus}</span>
                 )}
               </div>
+
+              {currentSlide.curatedScript && (
+                <div className="text-[11px] text-slate-300 bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-purple-200 font-semibold">정돈본 보관 위치</span>
+                    {currentSlide.curatedScriptMeta?.generatedAt && (
+                      <span className="text-slate-400">{new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString('ko-KR')}</span>
+                    )}
+                  </div>
+                  <p>정리된 대본은 이 탭과 녹음/노트 탭의 "Deepseek 정돈본" 영역에서 다시 확인할 수 있습니다.</p>
+                </div>
+              )}
+
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
                 <button
                   onClick={handleGenerateCuratedScript}
@@ -606,6 +709,12 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                 {liveSyncStatus && (
                   <p className="text-[11px] text-slate-400 text-center">{liveSyncStatus}</p>
                 )}
+                <div className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">
+                  <p className="text-purple-200 font-semibold">싱크 사용 가이드</p>
+                  <p>1) 정돈된 대본을 만든 뒤, 최종 리허설로 녹음하면 자동으로 비교합니다.</p>
+                  <p>2) 이미 녹음한 전사가 있으면 "Deepseek 싱크 맞추기" 버튼으로 즉시 다시 비교할 수 있습니다.</p>
+                  <p>3) 정합 요약·누락 포인트·다음 문장 제안은 아래 미리보기 카드에 저장됩니다.</p>
+                </div>
                 {currentSlide.liveSyncPreview && (
                   <div className="bg-purple-950/40 border border-purple-700/40 rounded p-3 text-[11px] space-y-2">
                     <div>
@@ -656,19 +765,58 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                             {take.isBest && <span className="px-2 py-0.5 rounded bg-purple-800 border border-purple-500 text-purple-100">가이드</span>}
                           </div>
                         </div>
-                        <button
-                          onClick={() => {
-                            const audio = new Audio(take.audioUrl);
-                            audio.play();
-                          }}
-                          className="text-purple-400 hover:text-purple-300 text-xs bg-purple-900 px-2 py-1 rounded"
-                        >
-                          재생
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              const audio = new Audio(take.audioUrl);
+                              audio.play();
+                            }}
+                            className="text-purple-400 hover:text-purple-300 text-xs bg-purple-900 px-2 py-1 rounded"
+                          >
+                            재생
+                          </button>
+                          <button
+                            onClick={() => handleEditTranscript(take.id)}
+                            className="text-slate-300 hover:text-white text-xs bg-slate-800 px-2 py-1 rounded"
+                          >
+                            수정
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTake(take.id)}
+                            className="text-red-300 hover:text-white text-xs bg-red-900/80 px-2 py-1 rounded"
+                          >
+                            삭제
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-slate-300 text-xs leading-relaxed">
-                        {take.transcript || '텍스트 변환 중...'}
-                      </p>
+                      {editingTakeId === take.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={editingTranscript}
+                            onChange={(e) => setEditingTranscript(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-white resize-none"
+                            rows={3}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleSaveTranscript(take.id)}
+                              className="text-xs px-3 py-1 rounded-lg bg-purple-700 text-white"
+                            >
+                              저장
+                            </button>
+                            <button
+                              onClick={() => { setEditingTakeId(null); setEditingTranscript(''); }}
+                              className="text-xs px-3 py-1 rounded-lg border border-slate-700 text-slate-200"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-slate-300 text-xs leading-relaxed">
+                          {take.transcript || '텍스트 변환 중...'}
+                        </p>
+                      )}
                       {take.feedback && (
                         <p className="text-[11px] text-purple-200">
                           {take.feedback}
