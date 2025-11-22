@@ -36,9 +36,25 @@ Proach는 현대 웹 스택만을 이용해 당신의 피치를 녹음하고, El
 	npm install
 	```
 3. 개발 서버 실행
-	```bash
-	npm run dev
-	```
+        ```bash
+        npm run dev
+        ```
+
+### Electron 데스크톱 앱 실행 및 배포
+- **개발 모드**: Vite 개발 서버를 띄운 뒤 Electron 셸에서 동일 화면을 확인합니다.
+    ```bash
+    npm run electron:dev
+    ```
+
+- **배포용 번들/설치 파일 생성**: Vite 정적 자산을 빌드하고, OS별 설치 파일(dmg/nsis/AppImage)을 `dist/` 아래에 생성합니다.
+    ```bash
+    npm run electron:build
+    ```
+  - macOS: `dist/Proach-{version}.dmg`
+  - Windows: `dist/Proach Setup {version}.exe` (NSIS 인스톨러)
+  - Linux: `dist/Proach-{version}.AppImage`
+
+- **실행 방식**: 개발 모드에서는 `http://localhost:5173` Vite 서버를 로드하고, 패키징 이후에는 `dist/index.html` 정적 파일을 로드합니다. `.env` 파일에 API 키를 넣어두면 데스크톱 앱에서도 동일하게 적용됩니다.
 
 ### 환경변수 설명 (최소 1개)
 - `VITE_ELEVENLABS_API_KEY` : ElevenLabs API Key (반드시 입력)
