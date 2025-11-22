@@ -23,12 +23,13 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
     const reader = new FileReader();
     reader.onload = () => {
       const pdfData = reader.result as string;
+      const presentationId = uuidv4();
       add({
-        id: uuidv4(),
+        id: presentationId,
         name: newName,
         createdAt: new Date().toISOString(),
         pdfName: newPDF.name,
-        pdfData: pdfData,
+        pdfData: pdfData, // 임시로 포함 (usePresentations에서 sessionStorage로 이동)
         pageCount: 9,
         slides: Array.from({ length: 9 }).map((_, i) => ({
           page: i + 1,
