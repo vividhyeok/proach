@@ -35,6 +35,7 @@ export interface Presentation {
   name: string;
   createdAt: string;
   pdfName: string;
+  pdfPath?: string;
   pdfData?: string; // PDF 파일 데이터 (base64) - 용량 이슈로 저장하지 않음
   pageCount: number;
   slides: SlideData[];

@@ -3,6 +3,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { usePresentations, Presentation } from '../hooks/usePresentations';
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { deepseekChat, extractJsonBlock } from '../utils/deepseek';
+import { ElectronAPI } from '../types/electron';
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 // Web Speech API 타입 정의
@@ -77,9 +78,11 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [scriptStatus, setScriptStatus] = useState<string | null>(null);
   const [liveSyncStatus, setLiveSyncStatus] = useState<string | null>(null);
   const [fullScriptStatus, setFullScriptStatus] = useState<string | null>(null);
+  const [isFloatingWindow, setIsFloatingWindow] = useState(false);
   const [panel, setPanel] = useState<'sync' | 'alerts' | 'library'>('sync');
   const [editingTakeId, setEditingTakeId] = useState<string | null>(null);
   const [editingTranscript, setEditingTranscript] = useState('');
+  const electronAPI: ElectronAPI | undefined = typeof window !== 'undefined' ? window.electronAPI : undefined;
   const panelTabs = [
     { key: 'sync', label: '대본 싱크', desc: '녹음·실시간 듣기·정렬' },
     { key: 'alerts', label: '경고/알림', desc: '누락·과다 설명 감지' },
@@ -202,12 +205,6 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     setScriptStatus(null);
     setLiveSyncStatus(null);
   }, [practiceMode, currentPage]);
-
-  useEffect(() => {
-    if (!presentation.pdfData) {
-      setPdfError('PDF 데이터가 없습니다.');
-    }
-  }, [presentation.pdfData]);
 
   const handleLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -853,7 +850,74 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
     update(presentation.id, { slides: updatedSlides });
   };
 
-  const pdfFile = presentation.pdfData;
+  const enableFloatingWindow = async () => {
+    if (!electronAPI) return;
+    try {
+      if (electronAPI.setWindowMode) {
+        await electronAPI.setWindowMode('pip');
+      } else if (electronAPI.setAlwaysOnTop) {
+        await electronAPI.setAlwaysOnTop(true);
+      }
+      setIsFloatingWindow(true);
+    } catch (error) {
+      console.error('플로팅 모드 전환 실패:', error);
+    }
+  };
+
+  const restoreWindowMode = async () => {
+    if (!electronAPI) return;
+    try {
+      if (electronAPI.setWindowMode) {
+        await electronAPI.setWindowMode('default');
+      } else if (electronAPI.setAlwaysOnTop) {
+        await electronAPI.setAlwaysOnTop(false);
+      }
+      setIsFloatingWindow(false);
+    } catch (error) {
+      console.error('기본 창 모드 복원 실패:', error);
+    }
+  };
+
+  const handleOpenExternalPdf = async () => {
+    if (!electronAPI || !presentation.pdfPath) {
+      setPdfError('Electron 환경에서만 PDF 팝업을 열 수 있습니다.');
+      return;
+    }
+    try {
+      await electronAPI.openPdfInChrome(presentation.pdfPath);
+      await enableFloatingWindow();
+    } catch (error) {
+      console.error('PDF 팝업 열기 실패:', error);
+      setPdfError('PDF 팝업을 열 수 없습니다. 다시 시도해주세요.');
+    }
+  };
+
+  useEffect(() => {
+    if (!electronAPI || !presentation.pdfPath) return;
+    enableFloatingWindow();
+    return () => {
+      restoreWindowMode();
+    };
+  }, [electronAPI, presentation.pdfPath]);
+
+  const pdfFile = useMemo(() => {
+    if (presentation.pdfData) return presentation.pdfData;
+    if (presentation.pdfPath) {
+      const normalized = presentation.pdfPath.startsWith('file://')
+        ? presentation.pdfPath
+        : `file://${presentation.pdfPath}`;
+      return { url: normalized };
+    }
+    return undefined;
+  }, [presentation.pdfData, presentation.pdfPath]);
+
+  useEffect(() => {
+    if (!presentation.pdfData && !presentation.pdfPath) {
+      setPdfError('PDF 파일을 찾지 못했습니다. 세션을 다시 생성해주세요.');
+    } else {
+      setPdfError(null);
+    }
+  }, [presentation.pdfData, presentation.pdfPath]);
 
   const activeTranscript = useMemo(() => {
     if (realtimeTranscript.trim()) return realtimeTranscript.trim();
@@ -956,19 +1020,35 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <button
-                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
+                  onClick={handleOpenExternalPdf}
+                  disabled={!electronAPI || !presentation.pdfPath}
+                  className="px-3 py-2 rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-40"
                 >
-                  이전
+                  PDF 팝업
                 </button>
                 <button
-                  onClick={() => setCurrentPage(prev => Math.min(numPages, prev + 1))}
-                  disabled={currentPage === numPages}
-                  className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
+                  onClick={isFloatingWindow ? restoreWindowMode : enableFloatingWindow}
+                  disabled={!electronAPI}
+                  className={`px-3 py-2 rounded-lg border ${isFloatingWindow ? 'border-purple-200 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-700 hover:border-purple-200'}`}
                 >
-                  다음
+                  {isFloatingWindow ? '기본 창으로' : 'PIP 모드'}
                 </button>
+                <div className="flex items-center gap-2 text-sm">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
+                  >
+                    이전
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(numPages, prev + 1))}
+                    disabled={currentPage === numPages}
+                    className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
+                  >
+                    다음
+                  </button>
+                </div>
               </div>
             </div>
             <div className="bg-slate-100 rounded-xl p-3 min-h-[480px] flex items-center justify-center shadow-inner">

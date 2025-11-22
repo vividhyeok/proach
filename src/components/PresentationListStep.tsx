@@ -1,5 +1,6 @@
-import React, { useRef, useState } from "react";
-const electronAPI = window.electronAPI;
+import React, { useState } from "react";
+import { ElectronAPI } from "../types/electron";
+const electronAPI: ElectronAPI | undefined = typeof window !== 'undefined' ? window.electronAPI : undefined;
 import { usePresentations } from "../hooks/usePresentations";
 import { v4 as uuidv4 } from 'uuid';
 const IconBox: React.FC<{ label: string }> = ({ label }) => (
@@ -23,43 +24,54 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
   const handleCreate = () => {
     try {
       if (!newName || !newPDFPath || !newPDFName) return;
+      if (!electronAPI) {
+        alert('Electron 환경에서만 PDF를 추가할 수 있습니다.');
+        return;
+      }
+
       const srcPath = newPDFPath;
       const destName = `${uuidv4()}_${newPDFName}`;
-      electronAPI.copyPdfToApp(srcPath, destName).then((copiedPath: string | null) => {
-        console.log('PDF 복제 결과:', copiedPath);
-        if (copiedPath) {
-          const presentationId = uuidv4();
-          add({
-            id: presentationId,
-            name: newName.trim(),
-            createdAt: new Date().toISOString(),
-            pdfName: newPDFName,
-            pdfPath: copiedPath,
-            pageCount: 9,
-            slides: Array.from({ length: 9 }).map((_, i) => ({
-              page: i + 1,
-              notes: "",
-              takes: [],
-            })),
-          });
-          console.log('세션 추가 완료');
-          electronAPI.openPdfInChrome(copiedPath);
-        } else {
-          console.error('PDF 복제 실패: 경로가 null입니다');
-        }
-        setNewName("");
-        setNewPDFPath(null);
-        setNewPDFName("");
-        setCreating(false);
-      }).catch(err => {
-        console.error('PDF 복제 중 오류:', err);
-      });
+      electronAPI.copyPdfToApp(srcPath, destName)
+        .then((copiedPath: string | null) => {
+          console.log('PDF 복제 결과:', copiedPath);
+          if (copiedPath) {
+            const presentationId = uuidv4();
+            add({
+              id: presentationId,
+              name: newName.trim(),
+              createdAt: new Date().toISOString(),
+              pdfName: newPDFName,
+              pdfPath: copiedPath,
+              pageCount: 9,
+              slides: Array.from({ length: 9 }).map((_, i) => ({
+                page: i + 1,
+                notes: "",
+                takes: [],
+              })),
+            });
+            console.log('세션 추가 완료');
+          } else {
+            console.error('PDF 복제 실패: 경로가 null입니다');
+          }
+          setNewName("");
+          setNewPDFPath(null);
+          setNewPDFName("");
+          setCreating(false);
+        })
+        .catch(err => {
+          console.error('PDF 복제 중 오류:', err);
+        });
     } catch (err) {
       console.error('세션 생성 중 오류:', err);
     }
   };
 
   const handleFileSelect = async () => {
+    if (!electronAPI) {
+      alert('Electron 환경에서만 PDF를 선택할 수 있습니다.');
+      return;
+    }
+
     const filePath = await electronAPI.selectPdfFile();
     if (filePath) {
       setNewPDFPath(filePath);
