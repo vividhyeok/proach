@@ -77,9 +77,14 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [scriptStatus, setScriptStatus] = useState<string | null>(null);
   const [liveSyncStatus, setLiveSyncStatus] = useState<string | null>(null);
   const [fullScriptStatus, setFullScriptStatus] = useState<string | null>(null);
-  const [panel, setPanel] = useState<'record' | 'ai' | 'history' | 'fullScript'>('record');
+  const [panel, setPanel] = useState<'sync' | 'alerts' | 'library'>('sync');
   const [editingTakeId, setEditingTakeId] = useState<string | null>(null);
   const [editingTranscript, setEditingTranscript] = useState('');
+  const panelTabs = [
+    { key: 'sync', label: '대본 싱크', desc: '녹음·실시간 듣기·정렬' },
+    { key: 'alerts', label: '경고/알림', desc: '누락·과다 설명 감지' },
+    { key: 'library', label: '자료·녹음', desc: '노트·정돈본·기록' },
+  ] as const;
   // 다중 트라이 선택 상태
   const [selectedTakeIds, setSelectedTakeIds] = useState<string[]>([]);
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
@@ -141,6 +146,16 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const [isRealtimeListening, setIsRealtimeListening] = useState(false);
   const [realtimeTranscript, setRealtimeTranscript] = useState('');
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
 
   const currentSlide = presentation.slides[currentPage - 1] || {
     page: currentPage,
@@ -840,52 +855,127 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
 
   const pdfFile = presentation.pdfData;
 
+  const activeTranscript = useMemo(() => {
+    if (realtimeTranscript.trim()) return realtimeTranscript.trim();
+    if (latestTranscript.trim()) return latestTranscript.trim();
+    const last = currentSlide.takes[currentSlide.takes.length - 1]?.transcript;
+    return last?.trim() || '';
+  }, [currentSlide.takes, latestTranscript, realtimeTranscript]);
+
+  const warningItems = useMemo(() => {
+    const items: { title: string; detail: string; level: 'info' | 'alert' | 'warning' }[] = [];
+    const guide = guideScript?.trim();
+    const transcript = activeTranscript;
+
+    if (!transcript) {
+      items.push({
+        title: '아직 전사가 없습니다',
+        detail: '녹음하거나 실시간 듣기를 켠 뒤 대본 싱크 탭에서 진행 상황을 확인하세요.',
+        level: 'info',
+      });
+      return items;
+    }
+
+    if (guide) {
+      const spokenWords = normalizeText(transcript);
+      const guideWords = normalizeText(guide);
+      if (guideWords.length) {
+        const coverage = Math.min(100, Math.round((guideWords.filter(word => spokenWords.includes(word)).length / guideWords.length) * 100));
+        const delta = spokenWords.length - guideWords.length;
+        if (coverage < 60) {
+          items.push({
+            title: '건너뛴 내용이 감지됐어요',
+            detail: `가이드 대비 커버리지가 약 ${coverage}%입니다. 핵심 문장을 빠르게 점검해 주세요.`,
+            level: 'alert',
+          });
+        }
+        if (delta > Math.max(6, guideWords.length * 0.2)) {
+          items.push({
+            title: '설명이 길어지고 있어요',
+            detail: '불필요한 반복을 줄이고 키 포인트 위주로 정리해 보세요.',
+            level: 'warning',
+          });
+        } else if (delta < -Math.max(6, guideWords.length * 0.2)) {
+          items.push({
+            title: '설명이 짧아요',
+            detail: '강조해야 할 근거나 예시를 한두 문장 추가해 보세요.',
+            level: 'warning',
+          });
+        }
+      }
+    }
+
+    if (currentSlide.liveSyncPreview?.missingPoints) {
+      items.push({
+        title: '누락된 키워드가 있어요',
+        detail: currentSlide.liveSyncPreview.missingPoints,
+        level: 'alert',
+      });
+    }
+
+    if (!guide) {
+      items.push({
+        title: '가이드 스크립트가 없어요',
+        detail: 'Deepseek 정돈본을 생성하거나 노트에 주요 문장을 작성하면 싱크 정확도가 올라갑니다.',
+        level: 'info',
+      });
+    }
+
+    return items;
+  }, [activeTranscript, currentSlide.liveSyncPreview?.missingPoints, guideScript, normalizeText]);
+
+
   return (
-    <div className="p-8 md:p-10 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-8 md:p-10 space-y-6 bg-gradient-to-b from-white via-slate-50 to-white rounded-3xl">
+      <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
-          <p className="text-sm text-slate-400">Step 2 · 슬라이드 연습</p>
-          <h2 className="text-2xl md:text-3xl font-bold text-white">{presentation.name}</h2>
+          <p className="text-sm text-slate-500">Step 2 · 리허설 & 실시간 코칭</p>
+          <h2 className="text-2xl md:text-3xl font-bold text-slate-900">{presentation.name}</h2>
           <p className="text-xs text-slate-500">PDF · {presentation.pdfName}</p>
         </div>
-        <button
-          onClick={onBack}
-          className="text-sm px-3 py-2 rounded-xl border border-slate-700 text-slate-300 hover:text-white hover:border-purple-400"
-        >
-          목록으로 돌아가기
-        </button>
+        <div className="flex items-center gap-2">
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${isRealtimeListening ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+            {isRealtimeListening ? '실시간 음성 인식 연결됨' : '실시간 음성 인식 대기 중'}
+          </span>
+          <button
+            onClick={onBack}
+            className="text-sm px-3 py-2 rounded-xl border border-slate-200 text-slate-700 hover:border-blue-200 hover:text-blue-700 bg-white"
+          >
+            목록으로 돌아가기
+          </button>
+        </div>
       </div>
 
-      <div className="grid lg:grid-cols-[1.4fr_1fr] gap-6">
+      <div className="grid lg:grid-cols-[1.35fr_1fr] gap-6">
         <div className="space-y-4">
-          <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2 text-sm text-slate-300">
-                <span className="px-2 py-1 rounded-full bg-purple-500/20 text-purple-100">슬라이드 {currentPage}</span>
-                <span className="px-2 py-1 rounded-full bg-slate-800 text-slate-300">총 {numPages}p</span>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700">PDF 실시간 확인</span>
+                <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-600">슬라이드 {currentPage} / {numPages}</span>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <button
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                   disabled={currentPage === 1}
-                  className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 disabled:opacity-40"
+                  className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
                 >
                   이전
                 </button>
                 <button
                   onClick={() => setCurrentPage(prev => Math.min(numPages, prev + 1))}
                   disabled={currentPage === numPages}
-                  className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 disabled:opacity-40"
+                  className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:border-blue-200 disabled:opacity-40"
                 >
                   다음
                 </button>
               </div>
             </div>
-            <div className="bg-white rounded-xl p-2 min-h-[480px] flex items-center justify-center shadow-inner">
+            <div className="bg-slate-100 rounded-xl p-3 min-h-[480px] flex items-center justify-center shadow-inner">
               {pdfError ? (
-                <div className="text-red-500 text-center">
-                  <p>{pdfError}</p>
-                  <p className="text-sm text-gray-600 mt-2">PDF 파일을 다시 업로드해주세요.</p>
+                <div className="text-red-600 text-center space-y-2">
+                  <p className="font-semibold">{pdfError}</p>
+                  <p className="text-sm text-slate-600">PDF 파일을 다시 업로드해주세요.</p>
                 </div>
               ) : (
                 <Document
@@ -901,7 +991,7 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
                 >
                   <Page
                     pageNumber={currentPage}
-                    width={540}
+                    width={560}
                     renderTextLayer={false}
                     renderAnnotationLayer={false}
                   />
@@ -909,293 +999,137 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
               )}
             </div>
           </div>
+
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-1 shadow-sm">
+              <p className="text-xs text-slate-500">현재 모드</p>
+              <p className="text-base font-semibold text-slate-900">{practiceMode === 'final' ? '최종 리허설' : '대본 구축'}</p>
+              <p className="text-xs text-slate-500">모드는 오른쪽 탭에서 바로 바꿀 수 있어요.</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-1 shadow-sm">
+              <p className="text-xs text-slate-500">음성 인식 상태</p>
+              <p className="text-base font-semibold text-slate-900">{status}</p>
+              <p className="text-xs text-slate-500">마이크/실시간 듣기 상태를 한눈에 확인합니다.</p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-1 shadow-sm">
+              <p className="text-xs text-slate-500">가이드 스크립트</p>
+              <p className="text-base font-semibold text-slate-900">{guideScript ? '준비됨' : '필요'}</p>
+              <p className="text-xs text-slate-500">정돈본 생성 후 자동으로 싱크 정확도가 올라갑니다.</p>
+            </div>
+          </div>
         </div>
 
-        <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex flex-col gap-4">
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
-            {[
-              { key: 'record', label: '녹음 · 노트' },
-              { key: 'ai', label: 'AI 코칭' },
-              { key: 'history', label: '녹음 기록' },
-              { key: 'fullScript', label: '전체 대본' }
-            ].map(({ key, label }) => (
+            {panelTabs.map(({ key, label, desc }) => (
               <button
                 key={key}
-                onClick={() => setPanel(key as typeof panel)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold border transition ${
-                  panel === key
-                    ? 'border-purple-400 bg-purple-500/15 text-purple-100'
-                    : 'border-slate-800 text-slate-300 hover:border-slate-700'
-                }`}
+                onClick={() => setPanel(key)}
+                className={`px-4 py-3 rounded-xl border text-left transition-all ${panel === key ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-blue-200 hover:text-blue-700'}`}
               >
-                {label}
+                <div className="text-sm font-semibold">{label}</div>
+                <div className="text-[11px] text-slate-500">{desc}</div>
               </button>
             ))}
           </div>
 
-          {panel === 'record' && (
+          {panel === 'sync' && (
             <div className="space-y-4">
-              <div>
-                <p className="text-sm text-slate-300 mb-2 font-semibold">연습 모드</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setPracticeMode('draft')}
-                    className={`px-3 py-3 rounded-xl text-sm border transition text-left ${practiceMode === 'draft'
-                      ? 'bg-purple-600/80 border-purple-400 text-white'
-                      : 'bg-slate-900 border-slate-800 text-slate-300'}`}
-                  >
-                    <div className="font-semibold">1~N트 대본 구축</div>
-                    <p className="text-[11px] text-purple-100/80">Scribe v1 · 소음 환경 대응</p>
-                  </button>
-                  <button
-                    onClick={() => setPracticeMode('final')}
-                    className={`px-3 py-3 rounded-xl text-sm border transition text-left ${practiceMode === 'final'
-                      ? 'bg-purple-600/80 border-purple-400 text-white'
-                      : 'bg-slate-900 border-slate-800 text-slate-300'}`}
-                  >
-                    <div className="font-semibold">최종 리허설</div>
-                    <p className="text-[11px] text-purple-100/80">Scribe v2 Realtime</p>
-                  </button>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-800">연습 모드 선택</span>
+                    <span className="text-[11px] text-slate-500">싱크 정확도에 영향</span>
+                  </div>
+                  <p className="text-xs text-slate-500">대본 구축 → 최종 리허설 순서로 진행하면 Deepseek 비교가 자동 적용됩니다.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setPracticeMode('draft')}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold ${practiceMode === 'draft' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:border-blue-200'}`}
+                    >
+                      대본 구축
+                    </button>
+                    <button
+                      onClick={() => setPracticeMode('final')}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold ${practiceMode === 'final' ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:border-purple-200'}`}
+                    >
+                      최종 리허설
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <button
-                    onClick={practiceMode === 'draft' ? toggleRecording : toggleRealtimeListening}
-                    disabled={
-                      practiceMode === 'draft'
-                        ? status.includes('처리') || status.includes('변환') || isRealtimeListening
-                        : isRecording
-                    }
-                    className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
-                      practiceMode === 'draft'
-                        ? (isRecording
-                            ? 'bg-red-600 hover:bg-red-700'
-                            : 'bg-purple-600 hover:bg-purple-700')
-                        : (isRealtimeListening
-                            ? 'bg-red-600 hover:bg-red-700'
-                            : 'bg-green-600 hover:bg-green-700')
-                    }`}
-                  >
-                    {practiceMode === 'draft' ? (
-                      isTranscribing ? (
-                        <>
-                          <LoadingSpinner size="xs" color="purple" />
-                          처리 중...
-                        </>
-                      ) : isRecording ? (
-                        '녹음 중지'
-                      ) : (
-                        '녹음 시작'
-                      )
-                    ) : isRealtimeListening ? (
-                      '실시간 중지'
-                    ) : (
-                      '실시간 연습'
-                    )}
-                  </button>
-                </div>
-                {!guideScript && practiceMode === 'final' && (
-                  <p className="text-slate-400 text-sm text-center">
-                    최종 리허설에서는 대본이 필요합니다. 먼저 녹음하거나 노트를 작성하세요.
+                <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-800">음성 제어</span>
+                    <span className={`text-xs px-2 py-1 rounded-full border ${isRecording ? 'border-red-300 text-red-600 bg-red-50' : 'border-slate-200 text-slate-600 bg-white'}`}>{isRecording ? '녹음 중' : '대기'}</span>
+                  </div>
+                  <p className="text-xs text-slate-500">녹음 종료 시 자동으로 ElevenLabs API에 텍스트 변환을 요청합니다.</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={toggleRecording}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold ${isRecording ? 'bg-red-600 text-white' : 'bg-green-600 text-white'} disabled:opacity-50`}
+                      disabled={isTranscribing}
+                    >
+                      {isRecording ? '녹음 중지' : '녹음 시작'}
+                    </button>
+                    <button
+                      onClick={toggleRealtimeListening}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold border ${isRealtimeListening ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-slate-700 border-slate-200 hover:border-purple-200'}`}
+                    >
+                      {isRealtimeListening ? '실시간 듣기 중지' : '실시간 듣기 시작'}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-purple-700 flex items-center gap-2">
+                    {isTranscribing && <LoadingSpinner size="xs" color="purple" />} {status}
                   </p>
-                )}
-                <p className="text-slate-400 text-sm">
-                  <LoadingText text={`상태: ${status}`} isLoading={isTranscribing} />
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-300">슬라이드 노트</label>
-                <textarea
-                  value={currentSlide.notes}
-                  onChange={(e) => handleNotesChange(e.target.value)}
-                  className="w-full h-32 bg-slate-900 border border-slate-800 rounded-xl p-3 text-white resize-none"
-                  placeholder="이 슬라이드에서 말할 주요 포인트를 적어보세요..."
-                />
-              </div>
-
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium text-slate-300">가이드 스크립트</h4>
-                {guideScript ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 leading-relaxed">
-                    {guideScript}
-                  </div>
-                ) : (
-                  <p className="text-slate-500 text-xs">
-                    노트에 주요 문장을 적거나 녹음 목록에서 "가이드로 사용"을 눌러 최종 리허설 참고 스크립트를 지정하세요.
-                  </p>
-                )}
-              </div>
-
-              {currentSlide.curatedScript && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <h4 className="text-sm font-medium text-slate-300">Deepseek 정돈본 저장됨</h4>
-                    {currentSlide.curatedScriptMeta?.generatedAt && (
-                      <span>
-                        {new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString('ko-KR')}
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-slate-900 border border-purple-600/30 rounded-xl p-3 text-xs text-slate-200 leading-relaxed space-y-2">
-                    <p className="text-[11px] text-purple-200">AI 코칭 탭에서 만든 정돈본이 여기에도 보관됩니다.</p>
-                    <div className="max-h-28 overflow-y-auto whitespace-pre-wrap border border-slate-800 rounded-lg p-2 bg-slate-950/60">
-                      {currentSlide.curatedScript}
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-[11px]">
-                      <button
-                        onClick={handleUseCuratedAsNotes}
-                        className="px-3 py-1 rounded-lg border border-purple-500/60 text-purple-100 hover:bg-purple-700/40"
-                      >
-                        이 내용을 노트에 붙여넣기
-                      </button>
-                      <button
-                        onClick={() => handleDownloadScript(currentSlide.curatedScript!, `${presentation.name}_슬라이드${currentPage}_대본.txt`)}
-                        className="px-3 py-1 rounded-lg border border-green-500/60 text-green-100 hover:bg-green-700/40"
-                      >
-                        TXT 다운로드
-                      </button>
-                      <button
-                        onClick={() => setPanel('ai')}
-                        className="px-3 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
-                      >
-                        AI 대본 정리 보기
-                      </button>
-                    </div>
-                  </div>
                 </div>
-              )}
+              </div>
 
-              {practiceMode === 'final' && (
-                <div className="space-y-2">
-                  <h4 className="text-sm font-medium text-slate-300">실시간 코칭</h4>
-                  <div className="bg-slate-900 border border-purple-600/30 rounded-xl p-3 space-y-2">
-                    <div className="flex flex-col md:flex-row gap-4">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-slate-400 mb-1">대본 미리보기</p>
-                        <div className="bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                          {guideScript
-                            ? <span dangerouslySetInnerHTML={{ __html: getCurrentSentenceSyncedHtml }} />
-                            : '가이드 스크립트가 없습니다.'}
-                        </div>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-slate-400 mb-1">실시간 전사</p>
-                        <div className="text-sm text-slate-100 min-h-[60px] bg-slate-950 border border-slate-800 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                          {realtimeTranscript || latestTranscript || '아직 전사가 없습니다.'}
-                        </div>
-                      </div>
+              <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-800">대본 싱크 미리보기</span>
+                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">슬라이드 {currentPage}</span>
+                  </div>
+                  <button
+                    onClick={handleManualLiveSync}
+                    className="text-xs px-3 py-2 rounded-lg border border-purple-200 text-purple-700 hover:bg-purple-50 disabled:opacity-40"
+                    disabled={!currentSlide.curatedScript}
+                  >
+                    {isLiveSyncAnalyzing && <LoadingSpinner size="xs" color="purple" />} Deepseek 싱크 맞추기
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500">실시간 듣기 또는 최종 리허설 녹음 시 전사가 도착하면 자동으로 싱크를 갱신합니다.</p>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-2">
+                    <p className="text-xs text-slate-500">가이드/정돈본</p>
+                    <div className="text-sm text-slate-800 min-h-[100px] whitespace-pre-wrap prose-sm prose" dangerouslySetInnerHTML={{ __html: getCurrentSentenceSyncedHtml || '<span class=\"text-slate-400\">정돈본을 생성하거나 노트를 작성하세요.</span>' }} />
+                  </div>
+                  <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span>실시간 전사</span>
+                      <span>{isRealtimeListening ? '수신 중' : '대기'}</span>
                     </div>
-                    <p className="text-xs text-purple-300 mt-2">
-                      {alignmentFeedback || '가이드 대비 피드백은 최종 리허설 녹음 후 제공됩니다.'}
+                    <div className="text-sm text-slate-800 min-h-[100px] bg-white border border-slate-200 rounded p-2 whitespace-pre-wrap max-h-36 overflow-y-auto">
+                      {realtimeTranscript || latestTranscript || '아직 전사가 없습니다.'}
+                    </div>
+                    <p className="text-[11px] text-purple-700">
+                      {alignmentFeedback || '최종 리허설 모드로 녹음하면 가이드 대비 피드백을 자동으로 표시합니다.'}
                     </p>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
-
-          {panel === 'ai' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-200">Deepseek 대본 정리</h4>
-                {scriptStatus && (
-                  <LoadingText text={scriptStatus} isLoading={isScriptGenerating} />
-                )}
-              </div>
-
-              {currentSlide.curatedScript && (
-                <div className="text-[11px] text-slate-300 bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-purple-200 font-semibold">정돈본 보관 위치</span>
-                    {currentSlide.curatedScriptMeta?.generatedAt && (
-                      <span className="text-slate-400">{new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString('ko-KR')}</span>
-                    )}
-                  </div>
-                  <p>정리된 대본은 이 탭과 녹음/노트 탭의 "Deepseek 정돈본" 영역에서 다시 확인할 수 있습니다.</p>
-                </div>
-              )}
-
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
-                <button
-                  onClick={handleGenerateCuratedScript}
-                  className="w-full text-sm bg-purple-700/80 hover:bg-purple-700 text-white py-2 rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
-                  disabled={selectedTakeIds.length === 0 && currentSlide.takes.length === 0}
-                  title={selectedTakeIds.length > 0 ? `선택된 ${selectedTakeIds.length}개 트라이로 대본 생성` : '전체 트라이로 대본 생성'}
-                >
-                  {isScriptGenerating && <LoadingSpinner size="xs" color="purple" />}
-                  {selectedTakeIds.length > 0 ? `선택 트라이(${selectedTakeIds.length})로 정돈 대본 생성` : 'N트 기반 정돈 대본 생성'}
-                </button>
-                {currentSlide.curatedScript ? (
-                  <div className="text-xs text-slate-200 space-y-2">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                      <span>최종본 업데이트</span>
-                      {currentSlide.curatedScriptMeta?.generatedAt && (
-                        <span>{new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString()}</span>
-                      )}
-                    </div>
-                    <div className="bg-slate-950 border border-slate-800 rounded p-3 max-h-36 overflow-y-auto whitespace-pre-wrap">
-                      {currentSlide.curatedScript}
-                    </div>
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => handleDownloadScript(currentSlide.curatedScript!, `${presentation.name}_슬라이드${currentPage}_대본.txt`)}
-                        className="px-3 py-1 rounded-lg border border-green-500/60 text-green-100 hover:bg-green-700/40 text-xs"
-                      >
-                        TXT 다운로드
-                      </button>
-                    </div>
-                    {currentSlide.curatedScriptMeta?.keyPoints && (
-                      <div>
-                        <p className="text-[10px] text-slate-400 mb-1">핵심 포인트</p>
-                        <ul className="list-disc pl-4 space-y-1">
-                          {currentSlide.curatedScriptMeta.keyPoints.map((point, idx) => (
-                            <li key={idx}>{point}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-500 text-center">
-                    대본 정리를 실행하면 정돈된 스크립트와 핵심 포인트가 여기에 나타납니다.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <button
-                  onClick={handleManualLiveSync}
-                  className="w-full text-xs border border-purple-500/60 text-purple-200 py-2 rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
-                  disabled={!currentSlide.curatedScript}
-                >
-                  {isLiveSyncAnalyzing && <LoadingSpinner size="xs" color="purple" />}
-                  Deepseek 싱크 맞추기
-                </button>
-                {liveSyncStatus && (
-                  <LoadingText text={liveSyncStatus} isLoading={isLiveSyncAnalyzing} />
-                )}
-                <div className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">
-                  <p className="text-purple-200 font-semibold">싱크 사용 가이드</p>
-                  <p>1) 정돈된 대본을 만든 뒤, 최종 리허설로 녹음하면 자동으로 비교합니다.</p>
-                  <p>2) 이미 녹음한 전사가 있으면 "Deepseek 싱크 맞추기" 버튼으로 즉시 다시 비교할 수 있습니다.</p>
-                  <p>3) 정합 요약·누락 포인트·다음 문장 제안은 아래 미리보기 카드에 저장됩니다.</p>
-                </div>
                 {currentSlide.liveSyncPreview && (
-                  <div className="bg-purple-950/40 border border-purple-700/40 rounded p-3 text-[11px] space-y-2">
-                    <div>
-                      <p className="text-purple-200 font-semibold">정합 요약</p>
-                      <p className="text-slate-100">{currentSlide.liveSyncPreview.alignmentSummary}</p>
+                  <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 text-sm space-y-2">
+                    <div className="flex items-center gap-2 text-purple-800 font-semibold">
+                      <span>최근 싱크 결과</span>
+                      <span className="text-xs text-purple-600">{new Date(currentSlide.liveSyncPreview.generatedAt).toLocaleTimeString()}</span>
                     </div>
-                    {currentSlide.liveSyncPreview.missingPoints && (
-                      <p className="text-slate-300">누락: {currentSlide.liveSyncPreview.missingPoints}</p>
-                    )}
+                    <p className="text-purple-900">{currentSlide.liveSyncPreview.alignmentSummary}</p>
+                    {currentSlide.liveSyncPreview.missingPoints && <p className="text-purple-800">누락: {currentSlide.liveSyncPreview.missingPoints}</p>}
                     {currentSlide.liveSyncPreview.nextLines && currentSlide.liveSyncPreview.nextLines.length > 0 && (
-                      <div>
-                        <p className="text-purple-200 font-semibold">다음 내용 미리보기</p>
-                        <ul className="list-decimal pl-4 space-y-1 text-slate-100">
+                      <div className="text-xs text-purple-800 space-y-1">
+                        <p className="font-semibold">다음 문장 제안</p>
+                        <ul className="list-disc pl-4">
                           {currentSlide.liveSyncPreview.nextLines.map((line, idx) => (
                             <li key={idx}>{line}</li>
                           ))}
@@ -1208,165 +1142,254 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
             </div>
           )}
 
-          {panel === 'history' && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-200">녹음 기록 ({currentSlide.takes.length})</h4>
-                <p className="text-[11px] text-slate-400">가이드로 지정해 최종 리허설 비교 기준을 만들 수 있어요.</p>
+          {panel === 'alerts' && (
+            <div className="space-y-4">
+              <div className="border border-amber-200 bg-amber-50 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-amber-900">경고/알림</span>
+                  <span className="text-xs text-amber-700">대본 싱크 기준으로 자동 생성</span>
+                </div>
+                <div className="space-y-3">
+                  {warningItems.map((warn, idx) => (
+                    <div key={idx} className={`border rounded-lg p-3 text-sm ${warn.level === 'alert' ? 'border-red-200 bg-white' : warn.level === 'warning' ? 'border-amber-200 bg-white' : 'border-slate-200 bg-white'}`}>
+                      <p className="font-semibold text-slate-900">{warn.title}</p>
+                      <p className="text-slate-600 text-xs">{warn.detail}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-                {currentSlide.takes.length === 0 ? (
-                  <p className="text-slate-500 text-sm text-center py-6">
-                    아직 녹음이 없습니다
-                  </p>
+
+              <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-slate-800">실시간 운영 체크리스트</span>
+                  <span className="text-xs text-slate-500">한눈에 상태 점검</span>
+                </div>
+                <div className="grid sm:grid-cols-3 gap-2 text-xs text-slate-700">
+                  <div className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                    <p className="font-semibold text-slate-900">PDF 확인</p>
+                    <p>{pdfError ? 'PDF 로드 오류' : '정상 표시 중'}</p>
+                  </div>
+                  <div className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                    <p className="font-semibold text-slate-900">음성 인식</p>
+                    <p>{isRealtimeListening ? '실시간 전사 중' : '녹음 기반 전사'}</p>
+                  </div>
+                  <div className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                    <p className="font-semibold text-slate-900">싱크 기준</p>
+                    <p>{guideScript ? '가이드 확보' : '정돈본 생성 필요'}</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500">경고가 뜨면 대본 싱크 탭에서 즉시 수정하고 다시 녹음해보세요.</p>
+              </div>
+            </div>
+          )}
+
+          {panel === 'library' && (
+            <div className="space-y-4">
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-800">슬라이드 노트</span>
+                    <span className="px-2 py-1 text-[11px] rounded bg-slate-100 text-slate-500">슬라이드 {currentPage}</span>
+                  </div>
+                  <button
+                    onClick={handleUseCuratedAsNotes}
+                    className="text-[11px] text-blue-700 hover:underline disabled:text-slate-400"
+                    disabled={!currentSlide.curatedScript}
+                  >
+                    정돈본을 노트로 복사
+                  </button>
+                </div>
+                <textarea
+                  value={currentSlide.notes}
+                  onChange={(e) => handleNotesChange(e.target.value)}
+                  rows={4}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-slate-800"
+                  placeholder="이 슬라이드에서 강조할 키워드, 문장, 시간을 적어두세요."
+                />
+              </div>
+
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-800">Deepseek 정돈본</h4>
+                  {scriptStatus && <LoadingText text={scriptStatus} isLoading={isScriptGenerating} />}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleGenerateCuratedScript}
+                    className="px-4 py-2 rounded-lg bg-purple-600 text-white text-sm font-semibold disabled:opacity-40 flex items-center gap-2"
+                    disabled={selectedTakeIds.length === 0 && currentSlide.takes.length === 0}
+                  >
+                    {isScriptGenerating && <LoadingSpinner size="xs" color="purple" />} 정돈본 생성
+                  </button>
+                  <p className="text-xs text-slate-500">녹음된 트라이를 선택하면 선택본만으로 대본을 만들 수 있습니다.</p>
+                </div>
+                {currentSlide.curatedScript ? (
+                  <div className="space-y-2 text-sm text-slate-800">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>업데이트</span>
+                      {currentSlide.curatedScriptMeta?.generatedAt && <span>{new Date(currentSlide.curatedScriptMeta.generatedAt).toLocaleTimeString('ko-KR')}</span>}
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded p-3 max-h-40 overflow-y-auto whitespace-pre-wrap">
+                      {currentSlide.curatedScript}
+                    </div>
+                    {currentSlide.curatedScriptMeta?.keyPoints && (
+                      <div className="text-[11px] text-slate-600 space-y-1">
+                        <p className="font-semibold text-slate-700">핵심 포인트</p>
+                        <ul className="list-disc pl-4 space-y-1">
+                          {currentSlide.curatedScriptMeta.keyPoints.map((point, idx) => (
+                            <li key={idx}>{point}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <button
+                      onClick={() => handleDownloadScript(currentSlide.curatedScript!, `${presentation.name}_슬라이드${currentPage}_대본.txt`)}
+                      className="text-xs text-blue-700 underline"
+                    >
+                      TXT 다운로드
+                    </button>
+                  </div>
                 ) : (
-                  currentSlide.takes.map((take) => (
-                    <div key={take.id} className="bg-slate-900 p-3 rounded-xl text-sm border border-slate-800 space-y-2 flex gap-2 items-start">
-                      <input
-                        type="checkbox"
-                        checked={selectedTakeIds.includes(take.id)}
-                        onChange={() => handleToggleTakeSelect(take.id)}
-                        className="mt-1 accent-purple-500"
-                        title="이 트라이를 정돈본 생성에 포함"
-                      />
-                      <div className="flex-1 space-y-2">
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="text-xs text-slate-400 space-y-1">
-                            <div className="font-semibold text-slate-200">
+                  <p className="text-xs text-slate-500">녹음 후 정돈본을 생성하면 이곳에 정리된 문장이 표시됩니다.</p>
+                )}
+              </div>
+
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-800">녹음 기록 ({currentSlide.takes.length})</h4>
+                  <p className="text-[11px] text-slate-500">가이드로 지정해 싱크 기준을 명확히 하세요.</p>
+                </div>
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                  {currentSlide.takes.length === 0 ? (
+                    <p className="text-slate-500 text-sm text-center py-6">아직 녹음이 없습니다.</p>
+                  ) : (
+                    currentSlide.takes.map((take) => (
+                      <div key={take.id} className="border border-slate-200 rounded-lg p-3 text-sm bg-slate-50 space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1 text-xs text-slate-600">
+                            <div className="font-semibold text-slate-800">
                               {take.mode === 'final' ? '최종 리허설' : '대본 구축'} {take.takeNumber ? `· ${take.takeNumber}트` : ''}
                             </div>
                             <div>{new Date(take.timestamp).toLocaleTimeString()}</div>
-                            <div className="flex gap-2 text-[10px]">
-                              {take.modelId && <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">{take.modelId}</span>}
-                              {take.isBest && <span className="px-2 py-0.5 rounded bg-purple-800 border border-purple-500 text-purple-100">가이드</span>}
+                            <div className="flex gap-2 text-[10px] flex-wrap">
+                              {take.modelId && <span className="px-2 py-0.5 rounded bg-white border border-slate-200">{take.modelId}</span>}
+                              {take.isBest && <span className="px-2 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-800">가이드</span>}
                             </div>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap justify-end">
                             <button
                               onClick={() => handlePlayPauseTake(take)}
-                              className={`text-xs px-2 py-1 rounded ${playingTakeId === take.id ? 'bg-red-700 text-white' : 'bg-purple-900 text-purple-400 hover:text-purple-300'}`}
+                              className={`text-xs px-2 py-1 rounded border ${playingTakeId === take.id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-700 border-slate-200'}`}
                             >
                               {playingTakeId === take.id ? '정지' : '재생'}
                             </button>
                             <button
                               onClick={() => handleEditTranscript(take.id)}
-                              className="text-slate-300 hover:text-white text-xs bg-slate-800 px-2 py-1 rounded"
+                              className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-700 bg-white"
                             >
                               수정
                             </button>
                             <button
                               onClick={() => handleDeleteTake(take.id)}
-                              className="text-red-300 hover:text-white text-xs bg-red-900/80 px-2 py-1 rounded"
+                              className="text-xs px-2 py-1 rounded border border-red-200 text-red-700 bg-white"
                             >
                               삭제
                             </button>
                           </div>
                         </div>
                         {editingTakeId === take.id ? (
-                        <div className="space-y-2">
-                          <textarea
-                            value={editingTranscript}
-                            onChange={(e) => setEditingTranscript(e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-white resize-none"
-                            rows={3}
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleSaveTranscript(take.id)}
-                              className="text-xs px-3 py-1 rounded-lg bg-purple-700 text-white"
-                            >
-                              저장
-                            </button>
-                            <button
-                              onClick={() => { setEditingTakeId(null); setEditingTranscript(''); }}
-                              className="text-xs px-3 py-1 rounded-lg border border-slate-700 text-slate-200"
-                            >
-                              취소
-                            </button>
+                          <div className="space-y-2">
+                            <textarea
+                              value={editingTranscript}
+                              onChange={(e) => setEditingTranscript(e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-800 resize-none"
+                              rows={3}
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleSaveTranscript(take.id)}
+                                className="text-xs px-3 py-1 rounded-lg bg-blue-600 text-white"
+                              >
+                                저장
+                              </button>
+                              <button
+                                onClick={() => { setEditingTakeId(null); setEditingTranscript(''); }}
+                                className="text-xs px-3 py-1 rounded-lg border border-slate-200 text-slate-700 bg-white"
+                              >
+                                취소
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <p className="text-slate-300 text-xs leading-relaxed">
-                          {take.transcript ? (
-                            take.transcript
-                          ) : (
-                            <span className="flex items-center gap-2 text-slate-400">
-                              <LoadingSpinner size="xs" color="purple" />
-                              텍스트 변환 중...
-                            </span>
-                          )}
-                        </p>
-                      )}
+                        ) : (
+                          <p className="text-slate-700 text-xs leading-relaxed">
+                            {take.transcript ? (
+                              take.transcript
+                            ) : (
+                              <span className="flex items-center gap-2 text-slate-500">
+                                <LoadingSpinner size="xs" color="purple" /> 텍스트 변환 중...
+                              </span>
+                            )}
+                          </p>
+                        )}
                         {take.feedback && (
-                        <p className="text-[11px] text-purple-200">
-                          {take.feedback}
-                        </p>
-                      )}
-                        <button
-                          onClick={() => handleMarkBest(take.id)}
-                          className="text-[11px] text-purple-300 hover:text-white underline"
-                        >
-                          {take.isBest ? '가이드 지정 해제' : '이 녹음을 가이드로 사용'}
-                        </button>
+                          <p className="text-[11px] text-purple-700">{take.feedback}</p>
+                        )}
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => handleMarkBest(take.id)}
+                            className="text-[11px] text-blue-700 underline"
+                          >
+                            {take.isBest ? '가이드 지정 해제' : '이 녹음을 가이드로 사용'}
+                          </button>
+                          <label className="flex items-center gap-1 text-[11px] text-slate-600">
+                            <input
+                              type="checkbox"
+                              checked={selectedTakeIds.includes(take.id)}
+                              onChange={() => handleToggleTakeSelect(take.id)}
+                              className="accent-purple-600"
+                            />
+                            정돈본 생성에 포함
+                          </label>
+                        </div>
                       </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {panel === 'fullScript' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-200">전체 프레젠테이션 대본</h4>
-                {fullScriptStatus && (
-                  <LoadingText text={fullScriptStatus} isLoading={isFullScriptGenerating} />
-                )}
+                    ))
+                  )}
+                </div>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="border border-slate-200 rounded-xl p-4 bg-white space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-800">전체 프레젠테이션 대본</h4>
+                  {fullScriptStatus && <LoadingText text={fullScriptStatus} isLoading={isFullScriptGenerating} />}
+                </div>
                 <button
                   onClick={handleGenerateFullScript}
-                  className="w-full text-sm bg-purple-700/80 hover:bg-purple-700 text-white py-2 rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
+                  className="w-full text-sm bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
                   disabled={presentation.slides.filter(s => s.curatedScript).length === 0}
                 >
-                  {isFullScriptGenerating && <LoadingSpinner size="xs" color="purple" />}
-                  전체 프레젠테이션 대본 생성
+                  {isFullScriptGenerating && <LoadingSpinner size="xs" color="purple" />} 전체 대본 생성
                 </button>
-
                 {presentation.fullScript ? (
-                  <div className="text-xs text-slate-200 space-y-2">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                      <span>전체 대본 생성일</span>
+                  <div className="text-xs text-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>생성일</span>
                       {presentation.fullScriptGeneratedAt && (
                         <span>{new Date(presentation.fullScriptGeneratedAt).toLocaleString()}</span>
                       )}
                     </div>
-                    <div className="bg-slate-950 border border-slate-800 rounded p-3 max-h-80 overflow-y-auto whitespace-pre-wrap">
+                    <div className="bg-slate-50 border border-slate-200 rounded p-3 max-h-60 overflow-y-auto whitespace-pre-wrap">
                       {presentation.fullScript}
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleDownloadScript(presentation.fullScript!, `${presentation.name}_전체_대본.txt`)}
-                        className="px-3 py-1 rounded-lg border border-green-500/60 text-green-100 hover:bg-green-700/40 text-xs"
-                      >
-                        TXT 다운로드
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => handleDownloadScript(presentation.fullScript!, `${presentation.name}_전체_대본.txt`)}
+                      className="text-xs text-blue-700 underline"
+                    >
+                      TXT 다운로드
+                    </button>
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-500 text-center">
-                    전체 대본을 생성하면 모든 슬라이드의 정돈본을 종합한 자연스러운 발표 대본이 여기에 나타납니다.
-                  </p>
+                  <p className="text-xs text-slate-500">각 슬라이드의 정돈본을 만든 뒤 전체 대본을 생성하면 리허설 흐름을 한눈에 볼 수 있습니다.</p>
                 )}
-              </div>
-
-              <div className="text-[11px] text-slate-400 bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-1">
-                <p className="text-purple-200 font-semibold">전체 대본 사용 가이드</p>
-                <p>1) 각 슬라이드에서 먼저 정돈본을 생성하세요.</p>
-                <p>2) "전체 프레젠테이션 대본 생성" 버튼으로 모든 슬라이드를 종합한 대본을 만듭니다.</p>
-                <p>3) 생성된 대본을 보며 전체 발표 흐름을 연습할 수 있습니다.</p>
               </div>
             </div>
           )}
