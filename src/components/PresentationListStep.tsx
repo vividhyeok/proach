@@ -17,6 +17,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
   const [newName, setNewName] = useState("");
   const [newPDF, setNewPDF] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
+  const [hasEditedName, setHasEditedName] = useState(false);
 
   const handleCreate = () => {
     if (!newName || !newPDF) return;
@@ -26,7 +27,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
       const presentationId = uuidv4();
       add({
         id: presentationId,
-        name: newName,
+        name: newName.trim(),
         createdAt: new Date().toISOString(),
         pdfName: newPDF.name,
         pdfData: pdfData, // 임시로 포함 (usePresentations에서 sessionStorage로 이동)
@@ -38,10 +39,20 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
         })),
       });
       setNewName("");
+      setHasEditedName(false);
       setNewPDF(null);
       setCreating(false);
     };
     reader.readAsDataURL(newPDF);
+  };
+
+  const handleFileChange = (file: File | null) => {
+    setNewPDF(file);
+    if (!file) return;
+    if (!hasEditedName) {
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
+      setNewName(baseName);
+    }
   };
 
   return (
@@ -53,12 +64,13 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
             <div className="w-1.5 h-1.5 rounded-full bg-blue-600" />
             Step 1 · 세션 관리
           </div>
-          <h2 className="text-3xl lg:text-4xl font-bold text-slate-900">
-            발표 세션을 체계적으로 관리하세요
-          </h2>
-          <p className="text-lg text-slate-600 max-w-2xl leading-relaxed">
-            PDF 자료를 업로드하고 세션을 생성하여 효율적인 발표 연습을 시작해보세요.
-          </p>
+              <h2 className="text-3xl lg:text-4xl font-bold text-slate-900">
+                한 번의 업로드로 준비·연습·코칭까지
+              </h2>
+              <p className="text-lg text-slate-600 max-w-2xl leading-relaxed">
+                PDF를 올리면 파일명을 기본 세션 이름으로 제안하고, 필요하면 바로 수정할 수 있습니다.
+                생성된 세션은 리허설·대본 싱크·경고 탭으로 이어집니다.
+              </p>
         </div>
         {!creating && (
           <button
@@ -152,12 +164,15 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
           
           <div className="grid lg:grid-cols-2 gap-6">
             <div className="space-y-3">
-              <label className="text-sm font-medium text-slate-700">세션 이름</label>
+              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                세션 이름
+                <span className="text-xs text-slate-400">PDF 파일명으로 자동 입력</span>
+              </label>
               <input
                 type="text"
                 placeholder="예: 투자사 데모데이 리허설"
                 value={newName}
-                onChange={e => setNewName(e.target.value)}
+                onChange={e => { setNewName(e.target.value); setHasEditedName(true); }}
                 className="w-full p-4 rounded-xl bg-slate-50 text-slate-900 border-2 border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
               />
             </div>
@@ -168,9 +183,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
                   type="file"
                   accept="application/pdf"
                   ref={fileInputRef}
-                  onChange={e => {
-                    if (e.target.files && e.target.files.length > 0) setNewPDF(e.target.files[0]);
-                  }}
+                  onChange={e => handleFileChange(e.target.files && e.target.files.length > 0 ? e.target.files[0] : null)}
                   className="w-full p-4 rounded-xl bg-slate-50 text-slate-900 border-2 border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 />
                 {newPDF && (
