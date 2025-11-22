@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
+let mainWindow = null;
+let defaultBounds = null;
 
 // PDF 파일 선택 IPC 핸들러
 ipcMain.handle('select-pdf-file', async () => {
@@ -38,7 +40,7 @@ ipcMain.handle('copy-pdf-to-app', async (event, srcPath, destName) => {
 
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     alwaysOnTop: false, // 기본값 false
@@ -54,29 +56,55 @@ function createWindow() {
     },
   })
 
-  // PDF 파일을 크롬으로 열기 위한 IPC 핸들러
-  ipcMain.handle('open-pdf-in-chrome', async (event, pdfPath) => {
-    if (pdfPath) {
-      win.setAlwaysOnTop(true);
-      // shell.openPath를 사용하여 로컬 파일 직접 열기
-      await shell.openPath(pdfPath);
-    }
-  });
-
-  // 오버레이 alwaysOnTop 동적 변경 IPC
-  ipcMain.handle('set-always-on-top', (event, value) => {
-    win.setAlwaysOnTop(!!value);
-  });
+  defaultBounds = mainWindow.getBounds();
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
   if (isDev && devServerUrl) {
-    win.loadURL(devServerUrl)
-    win.webContents.openDevTools({ mode: 'detach' })
+    mainWindow.loadURL(devServerUrl)
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     const indexPath = path.join(__dirname, '..', 'dist', 'index.html')
-    win.loadFile(indexPath)
+    mainWindow.loadFile(indexPath)
   }
 }
+
+// PDF 파일을 크롬으로 열기 위한 IPC 핸들러
+ipcMain.handle('open-pdf-in-chrome', async (event, pdfPath) => {
+  if (pdfPath && mainWindow) {
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    await shell.openPath(pdfPath);
+  }
+});
+
+// 오버레이 alwaysOnTop 동적 변경 IPC
+ipcMain.handle('set-always-on-top', (event, value) => {
+  if (mainWindow) {
+    mainWindow.setAlwaysOnTop(!!value);
+  }
+});
+
+ipcMain.handle('set-window-mode', (event, mode) => {
+  if (!mainWindow) return;
+  if (mode === 'pip') {
+    if (!defaultBounds) {
+      defaultBounds = mainWindow.getBounds();
+    }
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.setSkipTaskbar(false);
+    mainWindow.setFullScreenable(false);
+    mainWindow.setResizable(true);
+    mainWindow.setMinimumSize(480, 320);
+    const { width, height } = defaultBounds || { width: 1280, height: 800 };
+    mainWindow.setBounds({ width: Math.round(width * 0.7), height: Math.round(height * 0.7) });
+  } else {
+    if (defaultBounds) {
+      mainWindow.setBounds(defaultBounds);
+    }
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setSkipTaskbar(false);
+    mainWindow.setFullScreenable(true);
+  }
+});
 
 app.whenReady().then(() => {
   createWindow()
