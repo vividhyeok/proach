@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+const electronAPI = window.electronAPI;
 import { usePresentations } from "../hooks/usePresentations";
 import { v4 as uuidv4 } from 'uuid';
 const IconBox: React.FC<{ label: string }> = ({ label }) => (
@@ -13,45 +14,61 @@ interface PresentationListStepProps {
 
 const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect }) => {
   const { presentations, add, remove } = usePresentations();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [newName, setNewName] = useState("");
-  const [newPDF, setNewPDF] = useState<File | null>(null);
+  const [newPDFPath, setNewPDFPath] = useState<string | null>(null);
+  const [newPDFName, setNewPDFName] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [hasEditedName, setHasEditedName] = useState(false);
 
   const handleCreate = () => {
-    if (!newName || !newPDF) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const pdfData = reader.result as string;
-      const presentationId = uuidv4();
-      add({
-        id: presentationId,
-        name: newName.trim(),
-        createdAt: new Date().toISOString(),
-        pdfName: newPDF.name,
-        pdfData: pdfData, // 임시로 포함 (usePresentations에서 sessionStorage로 이동)
-        pageCount: 9,
-        slides: Array.from({ length: 9 }).map((_, i) => ({
-          page: i + 1,
-          notes: "",
-          takes: [],
-        })),
+    try {
+      if (!newName || !newPDFPath || !newPDFName) return;
+      const srcPath = newPDFPath;
+      const destName = `${uuidv4()}_${newPDFName}`;
+      electronAPI.copyPdfToApp(srcPath, destName).then((copiedPath: string | null) => {
+        console.log('PDF 복제 결과:', copiedPath);
+        if (copiedPath) {
+          const presentationId = uuidv4();
+          add({
+            id: presentationId,
+            name: newName.trim(),
+            createdAt: new Date().toISOString(),
+            pdfName: newPDFName,
+            pdfPath: copiedPath,
+            pageCount: 9,
+            slides: Array.from({ length: 9 }).map((_, i) => ({
+              page: i + 1,
+              notes: "",
+              takes: [],
+            })),
+          });
+          console.log('세션 추가 완료');
+          electronAPI.openPdfInChrome(copiedPath);
+        } else {
+          console.error('PDF 복제 실패: 경로가 null입니다');
+        }
+        setNewName("");
+        setNewPDFPath(null);
+        setNewPDFName("");
+        setCreating(false);
+      }).catch(err => {
+        console.error('PDF 복제 중 오류:', err);
       });
-      setNewName("");
-      setHasEditedName(false);
-      setNewPDF(null);
-      setCreating(false);
-    };
-    reader.readAsDataURL(newPDF);
+    } catch (err) {
+      console.error('세션 생성 중 오류:', err);
+    }
   };
 
-  const handleFileChange = (file: File | null) => {
-    setNewPDF(file);
-    if (!file) return;
-    if (!hasEditedName) {
-      const baseName = file.name.replace(/\.[^/.]+$/, "");
-      setNewName(baseName);
+  const handleFileSelect = async () => {
+    const filePath = await electronAPI.selectPdfFile();
+    if (filePath) {
+      setNewPDFPath(filePath);
+      const fileName = filePath.split(/[/\\]/).pop() || "";
+      setNewPDFName(fileName);
+      if (!hasEditedName) {
+        const baseName = fileName.replace(/\.[^/.]+$/, "");
+        setNewName(baseName);
+      }
     }
   };
 
@@ -179,17 +196,17 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
             <div className="space-y-3">
               <label className="text-sm font-medium text-slate-700">PDF 업로드</label>
               <div className="relative">
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  ref={fileInputRef}
-                  onChange={e => handleFileChange(e.target.files && e.target.files.length > 0 ? e.target.files[0] : null)}
-                  className="w-full p-4 rounded-xl bg-slate-50 text-slate-900 border-2 border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                />
-                {newPDF && (
+                <button
+                  type="button"
+                  className="w-full p-4 rounded-xl bg-slate-50 text-slate-900 border-2 border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all font-semibold hover:bg-blue-100"
+                  onClick={handleFileSelect}
+                >
+                  PDF 파일 선택
+                </button>
+                {newPDFName && (
                   <div className="absolute right-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
                     <span className="text-green-600 text-sm">📄</span>
-                    <span className="text-sm text-green-600 font-medium">{newPDF.name}</span>
+                    <span className="text-sm text-green-600 font-medium">{newPDFName}</span>
                   </div>
                 )}
               </div>
@@ -205,7 +222,7 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
             </button>
             <button
               className="inline-flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold"
-              disabled={!newName || !newPDF}
+              disabled={!newName || !newPDFName || !newPDFPath}
               onClick={handleCreate}
             >
               <IconBox label="⇧" />
