@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { usePresentations, Presentation } from '../hooks/usePresentations';
+import { Presentation } from '../hooks/usePresentations';
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { deepseekChat, extractJsonBlock } from '../utils/deepseek';
 import { ElectronAPI } from '../types/electron';
@@ -63,10 +63,10 @@ declare var SpeechRecognition: {
 interface SlidePracticeStepProps {
   presentation: Presentation;
   onBack: () => void;
+  update: (id: string, patch: Partial<Presentation>) => void;
 }
 
-const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onBack }) => {
-  const { update } = usePresentations();
+const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onBack, update }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [numPages, setNumPages] = useState<number>(presentation.pageCount);
   const [isRecording, setIsRecording] = useState(false);
@@ -209,7 +209,15 @@ const SlidePracticeStep: React.FC<SlidePracticeStepProps> = ({ presentation, onB
   const handleLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     setPdfError(null);
-    update(presentation.id, { pageCount: numPages });
+
+    const adjustedSlides = Array.from({ length: numPages }, (_, index) => {
+      const existing = presentation.slides[index];
+      return existing
+        ? { ...existing, page: index + 1 }
+        : { page: index + 1, notes: '', takes: [] };
+    });
+
+    update(presentation.id, { pageCount: numPages, slides: adjustedSlides });
   };
 
   const handleLoadError = (error: Error) => {

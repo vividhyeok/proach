@@ -4,7 +4,7 @@ import SlidePracticeStep from './components/SlidePracticeStep';
 import { usePresentations } from './hooks/usePresentations';
 
 const App: React.FC = () => {
-  const { presentations } = usePresentations();
+  const { presentations, add, remove, update } = usePresentations();
   const [step, setStep] = useState<'list' | 'practice'>('list');
   const [currentId, setCurrentId] = useState<string | null>(null);
 
@@ -13,6 +13,14 @@ const App: React.FC = () => {
     : undefined;
 
   const activeStepIndex = step === 'list' ? 0 : 1;
+
+
+  React.useEffect(() => {
+    if (step === 'practice' && !currentPresentation) {
+      setStep('list');
+      setCurrentId(null);
+    }
+  }, [step, currentPresentation]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900">
@@ -65,12 +73,16 @@ const App: React.FC = () => {
         <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
           {step === 'list' && (
             <PresentationListStep
+              presentations={presentations}
+              add={add}
+              remove={remove}
               onSelect={id => { setCurrentId(id); setStep('practice'); }}
             />
           )}
           {step === 'practice' && currentPresentation && (
             <SlidePracticeStep
               presentation={currentPresentation}
+              update={update}
               onBack={() => setStep('list')}
             />
           )}
