@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { ElectronAPI } from "../types/electron";
 const electronAPI: ElectronAPI | undefined = typeof window !== 'undefined' ? window.electronAPI : undefined;
-import { usePresentations } from "../hooks/usePresentations";
+import { Presentation } from "../hooks/usePresentations";
 import { v4 as uuidv4 } from 'uuid';
 const IconBox: React.FC<{ label: string }> = ({ label }) => (
   <span className="inline-flex items-center justify-center w-4 h-4 text-current font-bold align-middle">
@@ -11,10 +11,12 @@ const IconBox: React.FC<{ label: string }> = ({ label }) => (
 
 interface PresentationListStepProps {
   onSelect: (presentationId: string) => void;
+  presentations: Presentation[];
+  add: (presentation: Presentation) => void;
+  remove: (presentationId: string) => void;
 }
 
-const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect }) => {
-  const { presentations, add, remove } = usePresentations();
+const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect, presentations, add, remove }) => {
   const [newName, setNewName] = useState("");
   const [newPDFPath, setNewPDFPath] = useState<string | null>(null);
   const [newPDFName, setNewPDFName] = useState<string>("");
@@ -42,8 +44,8 @@ const PresentationListStep: React.FC<PresentationListStepProps> = ({ onSelect })
               createdAt: new Date().toISOString(),
               pdfName: newPDFName,
               pdfPath: copiedPath,
-              pageCount: 9,
-              slides: Array.from({ length: 9 }).map((_, i) => ({
+              pageCount: 1,
+              slides: Array.from({ length: 1 }).map((_, i) => ({
                 page: i + 1,
                 notes: "",
                 takes: [],
